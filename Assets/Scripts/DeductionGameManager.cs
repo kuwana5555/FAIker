@@ -6,36 +6,112 @@ using UnityEngine.UI;
 using System.Linq;
 
 /// <summary>
-/// 推理ゲームのメイン管理システム
+/// TriviaManagerをベースにした推理ゲーム管理システム
+/// 既存のUI構造とネットワーク同期を活用
 /// </summary>
 public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
 {
     [Header("Game Data")]
     [Tooltip("推理ゲーム用のお題データ")]
-    public DeductionTopicSet topicSet;
+    public DeductionTopicSet deductionTopics;
 
-    [Header("UI Elements")]
-    [Tooltip("ゲーム画面のコンテナ")]
-    public GameObject gameContainer;
+    [Header("UI Elements - 既存のTriviaManagerと同じ構造")]
+    [Tooltip("Container for the game elements")]
+    public GameObject questionElements = null;
+
+    #region Networked Properties - TriviaManagerと同じ構造を活用
+    [Networked, Tooltip("Timer used for game phases and transitions.")]
+    public TickTimer timer { get; set; }
+
+    [Networked, Tooltip("The length of the timer, used to help get a percentage when rendering timers.")]
+    public float timerLength { get; set; }
+
+    [Tooltip("The current round number.")]
+    [Networked, OnChangedRender(nameof(UpdateCurrentRound))]
+    public int CurrentRound { get; set; } = 0;
+
+    [Tooltip("The current state of the deduction game.")]
+    [Networked, OnChangedRender(nameof(OnDeductionGameStateChanged))]
+    public DeductionGameState GameState { get; set; } = DeductionGameState.Intro;
+
+    [Tooltip("Index of the parent player for this round.")]
+    [Networked, OnChangedRender(nameof(UpdateParentPlayer))]
+    public int ParentPlayerIndex { get; set; } = -1;
+
+    [Tooltip("Current topic for this round.")]
+    [Networked, OnChangedRender(nameof(UpdateCurrentTopic))]
+    public NetworkString<_64> CurrentTopic { get; set; }
+
+    [Tooltip("First character for this round.")]
+    [Networked, OnChangedRender(nameof(UpdateFirstCharacter))]
+    public NetworkString<_16> CurrentFirstCharacter { get; set; }
+
+    [Tooltip("AI's answer (only visible to parent player).")]
+    [Networked]
+    public NetworkString<_64> AIAnswer { get; set; }
+
+    // プレイヤーの回答を格納（TriviaManagerのrandomizedQuestionListの代わり）
+    [Networked, Capacity(20)]
+    public NetworkArray<NetworkString<_64>> PlayerAnswers => default;
+
+    // プレイヤーの投票を格納
+    [Networked, Capacity(20)]
+    public NetworkArray<int> PlayerVotes => default;
+
+    #endregion
+
+    #region UI Elements - TriviaManagerの構造を再利用
     
-    [Tooltip("お題表示用テキスト")]
-    public TextMeshProUGUI topicText;
+    /// <summary>
+    /// お題、回答入力、投票関連のUI
+    /// </summary>
+    public TextMeshProUGUI question; // お題表示用に再利用
+    public TextMeshProUGUI[] answers; // 投票時の回答表示用に再利用
+    public Image[] answerHighlights; // 投票結果表示用に再利用
+
+    /// <summary>
+    /// タイマー表示（TriviaManagerと同じ）
+    /// </summary>
+    public Image timerVisual;
     
-    [Tooltip("最初の文字表示用テキスト")]
-    public TextMeshProUGUI firstCharacterText;
+    [Tooltip("Gradient used to color the timer based on percentage.")]
+    public Gradient timerVisualGradient;
+
+    /// <summary>
+    /// ゲーム進行表示
+    /// </summary>
+    public TextMeshProUGUI questionIndicatorText; // "ラウンド X / 5" 表示用に再利用
+    public TextMeshProUGUI triviaMessage; // ゲーム状態メッセージ用に再利用
+
+    [Tooltip("Button displayed to leave the game after a round ends.")]
+    public GameObject leaveGameBtn;
+
+    [Tooltip("Button displayed, only to the master client, to start a new game.")]
+    public GameObject startNewGameBtn;
+
+    [Tooltip("MonoBehaviour that displays winner at the end of a game.")]
+    public TriviaEndGame endGameObject; // 結果表示用に再利用
+
+    #endregion
+
+    #region 推理ゲーム専用UI
     
-    [Tooltip("現在のラウンド表示用テキスト")]
-    public TextMeshProUGUI roundText;
-    
-    [Tooltip("ゲーム状態メッセージ用テキスト")]
-    public TextMeshProUGUI gameStateText;
-    
+    [Header("Deduction Game Specific UI")]
     [Tooltip("回答入力フィールド")]
     public TMP_InputField answerInputField;
     
     [Tooltip("回答送信ボタン")]
     public Button submitAnswerButton;
     
+    [Tooltip("最初の文字表示用テキスト")]
+    public TextMeshProUGUI firstCharacterText;
+    
+    [Tooltip("親プレイヤー用のAI回答表示エリア")]
+    public GameObject aiAnswerDisplayArea;
+    
+    [Tooltip("AI回答表示用テキスト")]
+    public TextMeshProUGUI aiAnswerText;
+
     [Tooltip("投票フェーズのUI")]
     public GameObject votingUI;
     
@@ -44,105 +120,93 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
     
     [Tooltip("投票ボタンの親オブジェクト")]
     public Transform voteButtonContainer;
-    
-    [Tooltip("結果表示UI")]
-    public GameObject resultsUI;
-    
-    [Tooltip("結果表示用テキスト")]
-    public TextMeshProUGUI resultsText;
-    
-    [Tooltip("スコア表示用テキスト")]
-    public TextMeshProUGUI scoresText;
-    
-    [Tooltip("次のラウンドボタン")]
-    public Button nextRoundButton;
-    
-    [Tooltip("ゲーム終了ボタン")]
-    public Button endGameButton;
-
-    [Header("Game Settings")]
-    [Tooltip("最大ラウンド数")]
-    public int maxRounds = 5;
-    
-    [Tooltip("回答時間（秒）")]
-    public float answerTime = 60f;
-    
-    [Tooltip("投票時間（秒）")]
-    public float votingTime = 30f;
-
-    #region Networked Properties
-    
-    [Networked, OnChangedRender(nameof(OnGameStateChanged))]
-    public DeductionGameState GameState { get; set; } = DeductionGameState.WaitingForPlayers;
-    
-    [Networked, OnChangedRender(nameof(OnCurrentRoundChanged))]
-    public int CurrentRound { get; set; } = 0;
-    
-    [Networked]
-    public int ParentPlayerIndex { get; set; } = -1;
-    
-    [Networked, OnChangedRender(nameof(OnTopicChanged))]
-    public NetworkString<_64> CurrentTopic { get; set; }
-    
-    [Networked, OnChangedRender(nameof(OnFirstCharacterChanged))]
-    public NetworkString<_16> CurrentFirstCharacter { get; set; }
-    
-    [Networked]
-    public NetworkString<_64> AIAnswer { get; set; }
-    
-    [Networked]
-    public TickTimer gameTimer { get; set; }
-    
-    [Networked]
-    public float timerLength { get; set; }
-    
-    // プレイヤーの回答を格納する配列
-    [Networked, Capacity(20)]
-    public NetworkArray<NetworkString<_64>> PlayerAnswers => default;
-    
-    // プレイヤーの投票を格納する配列
-    [Networked, Capacity(20)]
-    public NetworkArray<int> PlayerVotes => default;
 
     #endregion
 
-    public enum DeductionGameState : byte
-    {
-        WaitingForPlayers = 0,
-        RoundStart = 1,
-        AnswerPhase = 2,
-        VotingPhase = 3,
-        Results = 4,
-        GameEnd = 5
-    }
+    [Header("Game Rules - TriviaManagerと同じ構造")]
+    [Tooltip("The maximum number of rounds to play.")]
+    [Min(1)]
+    public int maxRounds = 5;
+
+    [Tooltip("The amount of time for answer phase.")]
+    public float answerTime = 60f;
+
+    [Tooltip("The amount of time for voting phase.")]
+    public float votingTime = 30f;
+
+    #region SFX - TriviaManagerと同じ
+    [Header("SFX Audio Sources")]
+    [SerializeField, Tooltip("AudioSource played when the local player submits answer.")]
+    private AudioSource _confirmSFX;
+
+    [SerializeField, Tooltip("AudioSource played when there's an error.")]
+    private AudioSource _errorSFX;
+
+    [SerializeField, Tooltip("AudioSource played when the local player gets correct result.")]
+    private AudioSource _correctSFX;
+
+    [SerializeField, Tooltip("AudioSource played when the local player gets incorrect result.")]
+    private AudioSource _incorrectSFX;
+    #endregion
 
     /// <summary>
-    /// ゲームマネージャーが存在するかどうか
+    /// 推理ゲーム管理システムが存在するかどうか
     /// </summary>
     public static bool DeductionManagerPresent { get; private set; } = false;
 
+    /// <summary>
+    /// 推理ゲームの状態
+    /// </summary>
+    public enum DeductionGameState : byte
+    {
+        Intro = 0,
+        AnswerPhase = 1,
+        VotingPhase = 2,
+        Results = 3,
+        GameOver = 4,
+        NewRound = 5,
+    }
+
     private List<Button> voteButtons = new List<Button>();
-    private Dictionary<int, int> roundScores = new Dictionary<int, int>();
 
     public override void Spawned()
     {
-        DeductionManagerPresent = true;
-        
+        // TriviaManagerと同じ初期化パターン
+        if (CurrentRound == 0)
+            questionIndicatorText.text = "";
+        else
+            questionIndicatorText.text = "Round: " + CurrentRound + " / " + maxRounds;
+
+        // プレイヤーの参加を制限（TriviaManagerと同じ）
+        if (Runner.IsSharedModeMasterClient)
+        {
+            Runner.SessionInfo.IsOpen = false;
+            Runner.SessionInfo.IsVisible = false;
+        }
+
+        // 権限を持つクライアントが初期設定を行う
         if (HasStateAuthority)
         {
-            GameState = DeductionGameState.WaitingForPlayers;
+            timerLength = 3f;
+            timer = TickTimer.CreateFromSeconds(Runner, timerLength);
             CurrentRound = 0;
+            SelectParentPlayer();
         }
-        
+
+        DeductionManagerPresent = true;
+
+        FusionConnector.Instance?.SetPregameMessage(string.Empty);
+
         // UI初期化
         InitializeUI();
-        
+
         // 状態更新
-        OnGameStateChanged();
-        OnCurrentRoundChanged();
-        OnTopicChanged();
-        OnFirstCharacterChanged();
-        
+        OnDeductionGameStateChanged();
+        UpdateCurrentRound();
+        UpdateCurrentTopic();
+        UpdateFirstCharacter();
+        UpdateParentPlayer();
+
         Debug.Log("DeductionGameManager spawned");
     }
 
@@ -153,34 +217,25 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
 
     private void InitializeUI()
     {
-        // ボタンイベントの設定
-        submitAnswerButton.onClick.AddListener(SubmitAnswer);
-        nextRoundButton.onClick.AddListener(StartNextRound);
-        endGameButton.onClick.AddListener(EndGame);
-        
         // 初期状態の設定
-        votingUI.SetActive(false);
-        resultsUI.SetActive(false);
-        answerInputField.gameObject.SetActive(false);
-        submitAnswerButton.gameObject.SetActive(false);
-    }
+        if (votingUI != null) votingUI.SetActive(false);
+        if (aiAnswerDisplayArea != null) aiAnswerDisplayArea.SetActive(false);
+        if (answerInputField != null) answerInputField.gameObject.SetActive(false);
+        if (submitAnswerButton != null) 
+        {
+            submitAnswerButton.gameObject.SetActive(false);
+            submitAnswerButton.onClick.AddListener(SubmitAnswer);
+        }
 
-    public void StartGame()
-    {
-        if (!HasStateAuthority) return;
-        
-        // 親プレイヤーをランダム選択
-        SelectParentPlayer();
-        
-        // 最初のラウンド開始
-        StartNewRound();
+        // 既存のUI要素を非表示
+        if (questionElements != null) questionElements.SetActive(false);
     }
 
     private void SelectParentPlayer()
     {
         if (!HasStateAuthority) return;
         
-        var players = DeductionPlayer.DeductionPlayerRefs;
+        var players = TriviaPlayer.TriviaPlayerRefs; // 既存のプレイヤーシステムを活用
         if (players.Count > 0)
         {
             ParentPlayerIndex = Random.Range(0, players.Count);
@@ -188,29 +243,84 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
         }
     }
 
+    /// <summary>
+    /// TriviaManagerのFixedUpdateNetworkと同じパターンでゲーム進行を管理
+    /// </summary>
+    public override void FixedUpdateNetwork()
+    {
+        if (!HasStateAuthority) return;
+
+        if (timer.Expired(Runner))
+        {
+            switch (GameState)
+            {
+                case DeductionGameState.Intro:
+                    StartNewRound();
+                    break;
+                    
+                case DeductionGameState.AnswerPhase:
+                    // 回答フェーズ終了 → 投票フェーズ
+                    GameState = DeductionGameState.VotingPhase;
+                    timerLength = votingTime;
+                    timer = TickTimer.CreateFromSeconds(Runner, timerLength);
+                    break;
+                    
+                case DeductionGameState.VotingPhase:
+                    // 投票フェーズ終了 → 結果表示
+                    CalculateResults();
+                    GameState = DeductionGameState.Results;
+                    timerLength = 5f;
+                    timer = TickTimer.CreateFromSeconds(Runner, timerLength);
+                    break;
+                    
+                case DeductionGameState.Results:
+                    // 結果表示終了
+                    if (CurrentRound >= maxRounds)
+                    {
+                        GameState = DeductionGameState.GameOver;
+                    }
+                    else
+                    {
+                        // 次のラウンドの親プレイヤーを選択
+                        var players = TriviaPlayer.TriviaPlayerRefs;
+                        if (players.Count > 0)
+                        {
+                            ParentPlayerIndex = (ParentPlayerIndex + 1) % players.Count;
+                        }
+                        StartNewRound();
+                    }
+                    break;
+            }
+        }
+    }
+
     private void StartNewRound()
     {
         if (!HasStateAuthority) return;
-        
+
         CurrentRound++;
         
         // 新しいお題と文字を選択
-        var topic = topicSet.GetRandomTopic();
-        if (topic != null)
+        if (deductionTopics != null)
         {
-            CurrentTopic = topic.topicText;
-            CurrentFirstCharacter = topicSet.GetRandomFirstCharacter(topic);
-            
-            // AI回答を生成
-            AIAnswer = AIPlayerSystem.GenerateAIAnswer(topic.topicText, CurrentFirstCharacter.Value);
+            var topic = deductionTopics.GetRandomTopic();
+            if (topic != null)
+            {
+                CurrentTopic = topic.topicText;
+                CurrentFirstCharacter = deductionTopics.GetRandomFirstCharacter(topic);
+                
+                // AI回答を生成
+                AIAnswer = AIPlayerSystem.GenerateAIAnswer(topic.topicText, CurrentFirstCharacter.Value);
+            }
         }
-        
-        // プレイヤーの回答と投票をリセット
+
+        // プレイヤーデータをリセット
         ClearPlayerData();
-        
+
         // 回答フェーズ開始
-        GameState = DeductionGameState.RoundStart;
-        SetTimer(3f); // 3秒後に回答フェーズへ
+        GameState = DeductionGameState.AnswerPhase;
+        timerLength = answerTime;
+        timer = TickTimer.CreateFromSeconds(Runner, timerLength);
     }
 
     private void ClearPlayerData()
@@ -222,55 +332,44 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
             PlayerAnswers.Set(i, "");
             PlayerVotes.Set(i, -1);
         }
-    }
 
-    public override void FixedUpdateNetwork()
-    {
-        if (!HasStateAuthority) return;
-        
-        if (gameTimer.Expired(Runner))
+        // プレイヤーの状態もリセット
+        var players = TriviaPlayer.TriviaPlayerRefs;
+        foreach (var player in players)
         {
-            switch (GameState)
-            {
-                case DeductionGameState.RoundStart:
-                    GameState = DeductionGameState.AnswerPhase;
-                    SetTimer(answerTime);
-                    break;
-                    
-                case DeductionGameState.AnswerPhase:
-                    GameState = DeductionGameState.VotingPhase;
-                    SetTimer(votingTime);
-                    break;
-                    
-                case DeductionGameState.VotingPhase:
-                    CalculateResults();
-                    GameState = DeductionGameState.Results;
-                    SetTimer(10f); // 結果表示時間
-                    break;
-                    
-                case DeductionGameState.Results:
-                    if (CurrentRound >= maxRounds)
-                    {
-                        GameState = DeductionGameState.GameEnd;
-                    }
-                    else
-                    {
-                        StartNewRound();
-                    }
-                    break;
-            }
+            player.ChosenAnswer = -1; // 回答リセット用に再利用
         }
     }
 
-    private void SetTimer(float seconds)
+    /// <summary>
+    /// TriviaManagerのUpdate()と同じパターンでタイマー表示を更新
+    /// </summary>
+    public void Update()
     {
-        timerLength = seconds;
-        gameTimer = TickTimer.CreateFromSeconds(Runner, seconds);
+        // タイマー表示の更新（TriviaManagerと同じ）
+        if (timerVisual != null)
+        {
+            float? remainingTime = timer.RemainingTime(Runner);
+            if (remainingTime.HasValue)
+            {
+                float percent = remainingTime.Value / timerLength;
+                timerVisual.fillAmount = percent;
+                if (timerVisualGradient != null)
+                {
+                    timerVisual.color = timerVisualGradient.Evaluate(percent);
+                }
+            }
+            else
+            {
+                timerVisual.fillAmount = 0f;
+            }
+        }
     }
 
     public void SubmitAnswer()
     {
         if (GameState != DeductionGameState.AnswerPhase) return;
+        if (answerInputField == null) return;
         
         string answer = answerInputField.text.Trim();
         if (string.IsNullOrEmpty(answer)) return;
@@ -278,17 +377,40 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
         // 最初の文字チェック
         if (!answer.StartsWith(CurrentFirstCharacter.Value))
         {
+            if (_errorSFX != null) _errorSFX.Play();
             Debug.LogWarning($"Answer must start with: {CurrentFirstCharacter.Value}");
             return;
         }
         
-        var localPlayer = DeductionPlayer.LocalPlayer;
+        var localPlayer = TriviaPlayer.LocalPlayer;
         if (localPlayer != null)
         {
-            localPlayer.SubmitAnswer(answer);
+            // 既存のTriviaPlayerシステムを活用
+            localPlayer.ChosenAnswer = 1; // 回答済みマークとして使用
+            
+            // 回答をネットワーク配列に保存
+            int playerIndex = TriviaPlayer.TriviaPlayerRefs.IndexOf(localPlayer);
+            if (playerIndex >= 0 && HasInputAuthority)
+            {
+                RPC_SubmitAnswer(playerIndex, answer);
+            }
+            
+            if (_confirmSFX != null) _confirmSFX.Play();
+            
+            // UI更新
             answerInputField.text = "";
             answerInputField.gameObject.SetActive(false);
             submitAnswerButton.gameObject.SetActive(false);
+        }
+    }
+
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    public void RPC_SubmitAnswer(int playerIndex, string answer)
+    {
+        if (playerIndex >= 0 && playerIndex < PlayerAnswers.Length)
+        {
+            PlayerAnswers.Set(playerIndex, answer);
+            Debug.Log($"Answer received from player {playerIndex}: {answer}");
         }
     }
 
@@ -296,21 +418,36 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
     {
         if (GameState != DeductionGameState.VotingPhase) return;
         
-        var localPlayer = DeductionPlayer.LocalPlayer;
+        var localPlayer = TriviaPlayer.LocalPlayer;
         if (localPlayer != null)
         {
-            localPlayer.SubmitVote(targetPlayerIndex);
+            int playerIndex = TriviaPlayer.TriviaPlayerRefs.IndexOf(localPlayer);
+            if (playerIndex >= 0 && HasInputAuthority)
+            {
+                RPC_SubmitVote(playerIndex, targetPlayerIndex);
+            }
         }
         
         // 投票ボタンを無効化
         DisableVoteButtons();
     }
 
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    public void RPC_SubmitVote(int playerIndex, int targetPlayerIndex)
+    {
+        if (playerIndex >= 0 && playerIndex < PlayerVotes.Length)
+        {
+            PlayerVotes.Set(playerIndex, targetPlayerIndex);
+            Debug.Log($"Vote received from player {playerIndex} for player {targetPlayerIndex}");
+        }
+    }
+
     private void DisableVoteButtons()
     {
         foreach (var button in voteButtons)
         {
-            button.interactable = false;
+            if (button != null)
+                button.interactable = false;
         }
     }
 
@@ -318,7 +455,7 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
     {
         if (!HasStateAuthority) return;
         
-        var players = DeductionPlayer.DeductionPlayerRefs;
+        var players = TriviaPlayer.TriviaPlayerRefs;
         var voteCounts = new Dictionary<int, int>();
         
         // 投票を集計
@@ -333,150 +470,111 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
             }
         }
         
-        // スコア計算
+        // スコア計算（TriviaPlayerのScoreシステムを活用）
         CalculateScores(voteCounts);
     }
 
     private void CalculateScores(Dictionary<int, int> voteCounts)
     {
-        var players = DeductionPlayer.DeductionPlayerRefs;
+        var players = TriviaPlayer.TriviaPlayerRefs;
         int parentIndex = ParentPlayerIndex;
-        int maxVotes = voteCounts.Values.Count > 0 ? voteCounts.Values.Max() : 0;
         
-        // 最も票を集めたプレイヤーを特定
-        int mostVotedPlayer = -1;
-        if (voteCounts.Count > 0)
+        if (voteCounts.Count == 0) return;
+        
+        int maxVotes = voteCounts.Values.Max();
+        int mostVotedPlayer = voteCounts.FirstOrDefault(x => x.Value == maxVotes).Key;
+        
+        // スコア付与
+        if (mostVotedPlayer == parentIndex && parentIndex < players.Count)
         {
-            mostVotedPlayer = voteCounts.FirstOrDefault(x => x.Value == maxVotes).Key;
+            // 親プレイヤーが最多票 → 3点
+            players[parentIndex].Score += 3;
         }
-        
-        // スコア付与ロジック
-        if (mostVotedPlayer == parentIndex)
+        else if (mostVotedPlayer < players.Count)
         {
-            // 親プレイヤーが最多票 → 親プレイヤーに3点
-            if (parentIndex < players.Count)
-            {
-                players[parentIndex].AddScore(3);
-            }
+            // 子プレイヤーが最多票 → 2点
+            players[mostVotedPlayer].Score += 2;
         }
-        else if (mostVotedPlayer >= 0)
-        {
-            // 子プレイヤーが最多票 → そのプレイヤーに2点
-            if (mostVotedPlayer < players.Count)
-            {
-                players[mostVotedPlayer].AddScore(2);
-            }
-        }
-        
-        // AIの回答に投票したプレイヤーに2点
-        // (この実装では簡略化のため、実際のAI回答との照合は省略)
-        
-        // 親プレイヤーボーナス: 誰もAIの回答に投票しなかった場合1点
-        // (実装簡略化のため省略)
     }
 
-    public void StartNextRound()
-    {
-        if (!HasStateAuthority) return;
-        if (GameState != DeductionGameState.Results) return;
-        
-        // 次のラウンドの親プレイヤーを選択（ローテーション）
-        var players = DeductionPlayer.DeductionPlayerRefs;
-        if (players.Count > 0)
-        {
-            ParentPlayerIndex = (ParentPlayerIndex + 1) % players.Count;
-        }
-        
-        StartNewRound();
-    }
+    #region UI Update Methods - TriviaManagerのパターンを踏襲
 
-    public void EndGame()
-    {
-        if (!HasStateAuthority) return;
-        
-        GameState = DeductionGameState.GameEnd;
-    }
-
-    #region UI Update Methods
-    
-    private void OnGameStateChanged()
+    private void OnDeductionGameStateChanged()
     {
         switch (GameState)
         {
-            case DeductionGameState.WaitingForPlayers:
-                gameStateText.text = "プレイヤー待機中...";
-                break;
-                
-            case DeductionGameState.RoundStart:
-                gameStateText.text = "ラウンド開始！";
-                votingUI.SetActive(false);
-                resultsUI.SetActive(false);
+            case DeductionGameState.Intro:
+                triviaMessage.text = "推理ゲーム開始\nまもなく最初のラウンドが始まります";
+                if (questionElements != null) questionElements.SetActive(false);
+                if (votingUI != null) votingUI.SetActive(false);
+                if (endGameObject != null) endGameObject.Hide();
                 break;
                 
             case DeductionGameState.AnswerPhase:
-                gameStateText.text = "回答フェーズ";
-                ShowAnswerUI();
+                ShowAnswerPhase();
                 break;
                 
             case DeductionGameState.VotingPhase:
-                gameStateText.text = "投票フェーズ";
-                ShowVotingUI();
+                ShowVotingPhase();
                 break;
                 
             case DeductionGameState.Results:
-                gameStateText.text = "結果発表";
-                ShowResultsUI();
+                ShowResults();
                 break;
                 
-            case DeductionGameState.GameEnd:
-                gameStateText.text = "ゲーム終了";
-                ShowFinalResults();
+            case DeductionGameState.GameOver:
+                ShowGameOver();
                 break;
         }
     }
-    
-    private void OnCurrentRoundChanged()
+
+    private void ShowAnswerPhase()
     {
-        roundText.text = $"ラウンド {CurrentRound} / {maxRounds}";
-    }
-    
-    private void OnTopicChanged()
-    {
-        topicText.text = $"お題: {CurrentTopic.Value}";
-    }
-    
-    private void OnFirstCharacterChanged()
-    {
-        firstCharacterText.text = $"最初の文字: 「{CurrentFirstCharacter.Value}」";
-    }
-    
-    private void ShowAnswerUI()
-    {
-        var localPlayer = DeductionPlayer.LocalPlayer;
-        bool isParent = localPlayer != null && DeductionPlayer.DeductionPlayerRefs.IndexOf(localPlayer) == ParentPlayerIndex;
+        triviaMessage.text = "回答フェーズ";
+        
+        if (questionElements != null) questionElements.SetActive(true);
+        if (votingUI != null) votingUI.SetActive(false);
+        
+        var localPlayer = TriviaPlayer.LocalPlayer;
+        bool isParent = localPlayer != null && 
+                       TriviaPlayer.TriviaPlayerRefs.IndexOf(localPlayer) == ParentPlayerIndex;
         
         if (isParent)
         {
-            // 親プレイヤーにはAI回答を表示
-            gameStateText.text = $"AI回答: {AIAnswer.Value}\n（この回答に似せて答えてください）";
+            // 親プレイヤーにAI回答を表示
+            if (aiAnswerDisplayArea != null) aiAnswerDisplayArea.SetActive(true);
+            if (aiAnswerText != null) aiAnswerText.text = $"AI回答: {AIAnswer.Value}\n（この回答に似せて答えてください）";
+        }
+        else
+        {
+            if (aiAnswerDisplayArea != null) aiAnswerDisplayArea.SetActive(false);
         }
         
-        answerInputField.gameObject.SetActive(true);
-        submitAnswerButton.gameObject.SetActive(true);
-        answerInputField.placeholder.GetComponent<TextMeshProUGUI>().text = $"{CurrentFirstCharacter.Value}で始まる回答を入力...";
+        // 回答入力UIを表示
+        if (answerInputField != null) 
+        {
+            answerInputField.gameObject.SetActive(true);
+            answerInputField.text = "";
+        }
+        if (submitAnswerButton != null) submitAnswerButton.gameObject.SetActive(true);
     }
-    
-    private void ShowVotingUI()
+
+    private void ShowVotingPhase()
     {
-        answerInputField.gameObject.SetActive(false);
-        submitAnswerButton.gameObject.SetActive(false);
-        votingUI.SetActive(true);
+        triviaMessage.text = "投票フェーズ - AIの回答だと思うものを選んでください";
+        
+        if (answerInputField != null) answerInputField.gameObject.SetActive(false);
+        if (submitAnswerButton != null) submitAnswerButton.gameObject.SetActive(false);
+        if (aiAnswerDisplayArea != null) aiAnswerDisplayArea.SetActive(false);
+        if (votingUI != null) votingUI.SetActive(true);
         
         CreateVoteButtons();
     }
-    
+
     private void CreateVoteButtons()
     {
+        if (voteButtonPrefab == null || voteButtonContainer == null) return;
+        
         // 既存のボタンをクリア
         foreach (var button in voteButtons)
         {
@@ -485,8 +583,8 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
         }
         voteButtons.Clear();
         
-        var players = DeductionPlayer.DeductionPlayerRefs;
-        var localPlayer = DeductionPlayer.LocalPlayer;
+        var players = TriviaPlayer.TriviaPlayerRefs;
+        var localPlayer = TriviaPlayer.LocalPlayer;
         int localPlayerIndex = players.IndexOf(localPlayer);
         
         for (int i = 0; i < players.Count; i++)
@@ -505,21 +603,24 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
             voteButtons.Add(button);
         }
     }
-    
-    private void ShowResultsUI()
+
+    private void ShowResults()
     {
-        votingUI.SetActive(false);
-        resultsUI.SetActive(true);
+        triviaMessage.text = "結果発表";
         
-        // 結果テキストを更新
-        UpdateResultsText();
+        if (votingUI != null) votingUI.SetActive(false);
+        if (questionElements != null) questionElements.SetActive(true);
+        
+        // 結果表示の詳細をTriviaManagerのパターンで実装
+        DisplayRoundResults();
     }
-    
-    private void UpdateResultsText()
+
+    private void DisplayRoundResults()
     {
-        var players = DeductionPlayer.DeductionPlayerRefs;
-        string results = "ラウンド結果:\n\n";
-        
+        var players = TriviaPlayer.TriviaPlayerRefs;
+        string results = $"ラウンド {CurrentRound} 結果\n\n";
+        results += $"お題: {CurrentTopic.Value}\n";
+        results += $"最初の文字: {CurrentFirstCharacter.Value}\n";
         results += $"AI回答: {AIAnswer.Value}\n";
         results += $"親プレイヤー: {(ParentPlayerIndex < players.Count ? players[ParentPlayerIndex].PlayerName.Value : "不明")}\n\n";
         
@@ -533,58 +634,112 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
             }
         }
         
-        resultsText.text = results;
-        
-        // スコア表示を更新
-        UpdateScoresText();
+        triviaMessage.text = results;
     }
-    
-    private void UpdateScoresText()
+
+    private void ShowGameOver()
     {
-        var players = DeductionPlayer.DeductionPlayerRefs;
-        string scores = "現在のスコア:\n";
+        triviaMessage.text = "ゲーム終了！";
         
-        // スコア順でソート
-        var sortedPlayers = players.OrderByDescending(p => p.Score).ToList();
+        if (questionElements != null) questionElements.SetActive(false);
+        if (votingUI != null) votingUI.SetActive(false);
         
-        foreach (var player in sortedPlayers)
+        // TriviaManagerのendGameObjectシステムを活用
+        if (endGameObject != null)
         {
-            scores += $"{player.PlayerName.Value}: {player.Score}点\n";
+            var players = TriviaPlayer.TriviaPlayerRefs;
+            var sortedPlayers = players.OrderByDescending(p => p.Score).ToList();
+            var winners = sortedPlayers.Take(3).ToList();
+            endGameObject.Show(winners);
         }
         
-        scoresText.text = scores;
+        // ゲーム制御ボタンを表示
+        if (leaveGameBtn != null) leaveGameBtn.SetActive(true);
+        if (startNewGameBtn != null) startNewGameBtn.SetActive(Runner.IsSharedModeMasterClient);
     }
-    
-    private void ShowFinalResults()
+
+    private void UpdateCurrentRound()
     {
-        resultsUI.SetActive(true);
-        nextRoundButton.gameObject.SetActive(false);
-        endGameButton.gameObject.SetActive(true);
-        
-        var players = DeductionPlayer.DeductionPlayerRefs;
-        var winner = players.OrderByDescending(p => p.Score).FirstOrDefault();
-        
-        string finalResults = "🎉 ゲーム終了 🎉\n\n";
-        if (winner != null)
+        if (questionIndicatorText != null)
         {
-            finalResults += $"優勝者: {winner.PlayerName.Value} ({winner.Score}点)\n\n";
+            if (CurrentRound == 0)
+                questionIndicatorText.text = "";
+            else
+                questionIndicatorText.text = "Round: " + CurrentRound + " / " + maxRounds;
         }
-        
-        finalResults += "最終スコア:\n";
-        var sortedPlayers = players.OrderByDescending(p => p.Score).ToList();
-        for (int i = 0; i < sortedPlayers.Count; i++)
-        {
-            finalResults += $"{i + 1}位: {sortedPlayers[i].PlayerName.Value} - {sortedPlayers[i].Score}点\n";
-        }
-        
-        resultsText.text = finalResults;
     }
-    
+
+    private void UpdateCurrentTopic()
+    {
+        if (question != null)
+        {
+            question.text = $"お題: {CurrentTopic.Value}";
+        }
+    }
+
+    private void UpdateFirstCharacter()
+    {
+        if (firstCharacterText != null)
+        {
+            firstCharacterText.text = $"最初の文字: 「{CurrentFirstCharacter.Value}」";
+        }
+    }
+
+    private void UpdateParentPlayer()
+    {
+        // プレイヤーの表示更新は各プレイヤー側で処理
+        Debug.Log($"Parent player updated: {ParentPlayerIndex}");
+    }
+
     #endregion
+
+    /// <summary>
+    /// TriviaManagerと同じパターンでゲーム終了処理
+    /// </summary>
+    public async void LeaveGame()
+    {
+        await Runner.Shutdown(true, ShutdownReason.Ok);
+
+        FusionConnector fc = GameObject.FindObjectOfType<FusionConnector>();
+        if (fc)
+        {
+            fc.mainMenuObject.SetActive(true);
+            fc.mainGameObject.SetActive(false);
+        }
+    }
+
+    /// <summary>
+    /// 新しいゲーム開始
+    /// </summary>
+    public void StartNewGame()
+    {
+        if (HasStateAuthority == false)
+            return;
+
+        GameState = DeductionGameState.NewRound;
+        CurrentRound = 0;
+
+        // プレイヤーのスコアをリセット
+        var players = TriviaPlayer.TriviaPlayerRefs;
+        foreach (var player in players)
+        {
+            player.Score = 0;
+        }
+
+        // 新しい親プレイヤーを選択
+        SelectParentPlayer();
+
+        // 初期タイマー設定
+        timerLength = 3f;
+        timer = TickTimer.CreateFromSeconds(Runner, timerLength);
+    }
 
     public void StateAuthorityChanged()
     {
-        // 権限が変更された場合の処理
-        Debug.Log("DeductionGameManager authority changed");
+        if (GameState == DeductionGameState.GameOver)
+        {
+            if (startNewGameBtn != null)
+                startNewGameBtn.SetActive(Runner.IsSharedModeMasterClient);
+        }
     }
 } 

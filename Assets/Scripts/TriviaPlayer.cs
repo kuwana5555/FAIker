@@ -10,7 +10,7 @@ using UnityEngine;
 using UnityEngine.UI;
 
 /// <summary>
-/// The main player asset created when a player joins the room.
+/// トリビアゲームと推理ゲーム両方に対応するプレイヤーシステム
 /// </summary>
 public class TriviaPlayer : NetworkBehaviour
 {
@@ -31,7 +31,7 @@ public class TriviaPlayer : NetworkBehaviour
     [Networked, OnChangedRender(nameof(OnAvatarChanged))]
     public int ChosenAvatar { get; set; } = -1;
 
-    [Tooltip("Which expression should the avatar be displaying now.  Should probably be an enum.")]
+    [Tooltip("Which expression should the avatar be displaying now.")]
     [Networked, OnChangedRender(nameof(OnAvatarChanged))]
     public AvatarExpressions Expression { get; set; } = AvatarExpressions.Neutral;
 
@@ -39,7 +39,7 @@ public class TriviaPlayer : NetworkBehaviour
     [Networked, OnChangedRender(nameof(OnScoreChanged))]
     public int Score { get; set; }
 
-    [Tooltip("What is the player's score.")]
+    [Tooltip("Score popup for visual feedback.")]
     [Networked, OnChangedRender(nameof(OnScorePopupChanged))]
     public TriviaScorePopUp ScorePopUp { get; set; }
 
@@ -51,7 +51,7 @@ public class TriviaPlayer : NetworkBehaviour
     [Networked, OnChangedRender(nameof(OnMasterClientChanged))]
     public NetworkBool IsMasterClient { get; set; }
 
-    [Tooltip("Which answer did the player choose.  0 is always the correct answer, but the answers are randomized locally.")]
+    [Tooltip("Which answer did the player choose. For trivia: 0 is correct answer. For deduction: -1 = no answer, 1 = answered")]
     [Networked, OnChangedRender(nameof(OnAnswerChosen))]
     public int ChosenAnswer { get; set; } = -1;
 
@@ -61,8 +61,18 @@ public class TriviaPlayer : NetworkBehaviour
     public NetworkBool Muted { get; set; }
 #endif
 
+    // 推理ゲーム用の追加プロパティ
+    [Tooltip("推理ゲームで回答済みかどうか")]
+    [Networked, OnChangedRender(nameof(OnDeductionAnswerStatusChanged))]
+    public NetworkBool HasDeductionAnswer { get; set; }
+
+    [Tooltip("推理ゲームで投票済みかどうか")]
+    [Networked, OnChangedRender(nameof(OnDeductionVoteStatusChanged))]
+    public NetworkBool HasDeductionVote { get; set; }
+
     #endregion
 
+    [Header("Player UI")]
     [Tooltip("Reference to the avatars a player can use.")]
     public Image avatarRenderer;
 
@@ -92,6 +102,16 @@ public class TriviaPlayer : NetworkBehaviour
     public Image speakingIcon;
 #endif
 
+    [Header("Deduction Game UI")]
+    [Tooltip("親プレイヤー表示用アイコン")]
+    public GameObject parentPlayerIcon;
+    
+    [Tooltip("回答済み表示用アイコン")]
+    public GameObject answeredIcon;
+    
+    [Tooltip("投票済み表示用アイコン")]
+    public GameObject votedIcon;
+
     [Tooltip("The sprites used to render the character")]
     public GameObject avatarSelectableSpriteGameObject;
 
@@ -111,7 +131,7 @@ public class TriviaPlayer : NetworkBehaviour
     private Animator _scorePopUpAnimator;
 
     /// <summary>
-    /// Unsure if this pattern is okay, but static references to the local player and a list of all players.
+    /// Static reference to the local player
     /// </summary>
     public static TriviaPlayer LocalPlayer;
 
@@ -127,6 +147,7 @@ public class TriviaPlayer : NetworkBehaviour
     /// A list of all players currently in the game.
     /// </summary>
     public static List<TriviaPlayer> TriviaPlayerRefs = new List<TriviaPlayer>();
+    
     public enum AvatarExpressions
     {
         Neutral = 0,
@@ -151,6 +172,8 @@ public class TriviaPlayer : NetworkBehaviour
         OnScoreChanged();
         OnPlayerNameChanged();
         OnAvatarChanged();
+        OnDeductionAnswerStatusChanged();
+        OnDeductionVoteStatusChanged();
 
         // We assign the local test player a different sprite
         if (Object.HasStateAuthority == true)
@@ -176,12 +199,25 @@ public class TriviaPlayer : NetworkBehaviour
         OnMuteChanged();
 #endif
 
+        // Initialize deduction game UI
+        InitializeDeductionUI();
+
         // Hides the avatar selector on spawn
         avatarSelectableSpriteGameObject.gameObject.SetActive(false);
 
         // We show the "Start Game Button" for the master client only, regardless of the number of players in the room.
-        bool showGameButton = Runner.IsSharedModeMasterClient && TriviaManager.TriviaManagerPresent == false;
+        bool showGameButton = Runner.IsSharedModeMasterClient && 
+                             !TriviaManager.TriviaManagerPresent && 
+                             !DeductionGameManager.DeductionManagerPresent;
         FusionConnector.Instance.showGameButton.SetActive(showGameButton);
+    }
+
+    private void InitializeDeductionUI()
+    {
+        // 推理ゲーム用UI要素の初期化
+        if (parentPlayerIcon != null) parentPlayerIcon.SetActive(false);
+        if (answeredIcon != null) answeredIcon.SetActive(false);
+        if (votedIcon != null) votedIcon.SetActive(false);
     }
 
     public void ShowDropdown()
@@ -235,7 +271,9 @@ public class TriviaPlayer : NetworkBehaviour
         if (HasStateAuthority)
             IsMasterClient = runner.IsSharedModeMasterClient;
 
-        bool showGameButton = Runner.IsSharedModeMasterClient && TriviaManager.TriviaManagerPresent == false;
+        bool showGameButton = Runner.IsSharedModeMasterClient && 
+                             !TriviaManager.TriviaManagerPresent && 
+                             !DeductionGameManager.DeductionManagerPresent;
         FusionConnector.Instance.showGameButton.SetActive(showGameButton);
     }
 
@@ -282,6 +320,176 @@ public class TriviaPlayer : NetworkBehaviour
         masterClientIcon.enabled = IsMasterClient;
     }
 
+    #region 推理ゲーム用メソッド
+
+    /// <summary>
+    /// 推理ゲーム用：回答状態が変更された時の処理
+    /// </summary>
+    void OnDeductionAnswerStatusChanged()
+    {
+        if (answeredIcon != null)
+        {
+            answeredIcon.SetActive(HasDeductionAnswer);
+        }
+    }
+
+    /// <summary>
+    /// 推理ゲーム用：投票状態が変更された時の処理
+    /// </summary>
+    void OnDeductionVoteStatusChanged()
+    {
+        if (votedIcon != null)
+        {
+            votedIcon.SetActive(HasDeductionVote);
+        }
+    }
+
+    /// <summary>
+    /// 推理ゲーム用：親プレイヤーかどうかを判定
+    /// </summary>
+    /// <returns>親プレイヤーの場合true</returns>
+    public bool IsParentPlayer()
+    {
+        var deductionManager = FindObjectOfType<DeductionGameManager>();
+        if (deductionManager == null) return false;
+        
+        int playerIndex = TriviaPlayerRefs.IndexOf(this);
+        return playerIndex == deductionManager.ParentPlayerIndex;
+    }
+
+    /// <summary>
+    /// 推理ゲーム用：親プレイヤー表示の更新
+    /// </summary>
+    /// <param name="isParent">親プレイヤーかどうか</param>
+    public void UpdateParentPlayerDisplay(bool isParent)
+    {
+        if (parentPlayerIcon != null)
+        {
+            parentPlayerIcon.SetActive(isParent);
+        }
+        
+        // 背景色も変更
+        if (backdrop != null)
+        {
+            if (isParent)
+            {
+                backdrop.color = new Color(1f, 0.8f, 0.8f, 1f); // 薄赤（親プレイヤー）
+            }
+            else if (Object.HasStateAuthority)
+            {
+                backdrop.color = new Color(0.8f, 1f, 0.8f, 1f); // 薄緑（ローカルプレイヤー）
+            }
+            else
+            {
+                backdrop.color = Color.white; // 通常の色
+            }
+        }
+    }
+
+    /// <summary>
+    /// 推理ゲーム用：ラウンド開始時のリセット
+    /// </summary>
+    public void ResetForDeductionRound()
+    {
+        if (!HasStateAuthority) return;
+        
+        HasDeductionAnswer = false;
+        HasDeductionVote = false;
+        ChosenAnswer = -1; // 回答リセット
+        Expression = AvatarExpressions.Neutral;
+    }
+
+    /// <summary>
+    /// 推理ゲーム用：回答完了をマーク
+    /// </summary>
+    public void MarkDeductionAnswered()
+    {
+        if (!HasStateAuthority) return;
+        
+        HasDeductionAnswer = true;
+        ChosenAnswer = 1; // 回答済みマーク
+    }
+
+    /// <summary>
+    /// 推理ゲーム用：投票完了をマーク
+    /// </summary>
+    public void MarkDeductionVoted()
+    {
+        if (!HasStateAuthority) return;
+        
+        HasDeductionVote = true;
+    }
+
+    /// <summary>
+    /// 推理ゲーム用：プレイヤーのインデックスを取得
+    /// </summary>
+    /// <returns>プレイヤーのインデックス</returns>
+    public int GetPlayerIndex()
+    {
+        return TriviaPlayerRefs.IndexOf(this);
+    }
+
+    /// <summary>
+    /// 推理ゲーム用：指定されたインデックスのプレイヤーを取得
+    /// </summary>
+    /// <param name="index">プレイヤーインデックス</param>
+    /// <returns>プレイヤーオブジェクト、存在しない場合はnull</returns>
+    public static TriviaPlayer GetPlayerByIndex(int index)
+    {
+        if (index >= 0 && index < TriviaPlayerRefs.Count)
+        {
+            return TriviaPlayerRefs[index];
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 推理ゲーム用：全プレイヤーの回答状況をチェック
+    /// </summary>
+    /// <returns>全員が回答済みの場合true</returns>
+    public static bool AllPlayersAnsweredDeduction()
+    {
+        foreach (var player in TriviaPlayerRefs)
+        {
+            if (!player.HasDeductionAnswer)
+                return false;
+        }
+        return TriviaPlayerRefs.Count > 0;
+    }
+
+    /// <summary>
+    /// 推理ゲーム用：全プレイヤーの投票状況をチェック
+    /// </summary>
+    /// <returns>全員が投票済みの場合true</returns>
+    public static bool AllPlayersVotedDeduction()
+    {
+        foreach (var player in TriviaPlayerRefs)
+        {
+            if (!player.HasDeductionVote)
+                return false;
+        }
+        return TriviaPlayerRefs.Count > 0;
+    }
+
+    #endregion
+
+    private void Update()
+    {
+        // 推理ゲーム用：親プレイヤー表示の更新（毎フレーム確認）
+        if (DeductionGameManager.DeductionManagerPresent)
+        {
+            bool isParent = IsParentPlayer();
+            if (parentPlayerIcon != null && parentPlayerIcon.activeSelf != isParent)
+            {
+                UpdateParentPlayerDisplay(isParent);
+            }
+        }
+
+#if !UNITY_WEBGL
+        speakingIcon.enabled = (_voiceNetworkObject.SpeakerInUse && _voiceNetworkObject.IsSpeaking) || (_voiceNetworkObject.RecorderInUse && _voiceNetworkObject.IsRecording);
+#endif
+    }
+
 #if !UNITY_WEBGL
     public void ToggleVoiceTransmission()
     {
@@ -295,11 +503,6 @@ public class TriviaPlayer : NetworkBehaviour
     public void OnMuteChanged()
     {
         muteSpeakerIcon.enabled = Muted;
-    }
-
-    private void Update()
-    {
-        speakingIcon.enabled = (_voiceNetworkObject.SpeakerInUse && _voiceNetworkObject.IsSpeaking) || (_voiceNetworkObject.RecorderInUse && _voiceNetworkObject.IsRecording);
     }
 #endif
 }
