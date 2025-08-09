@@ -34,11 +34,21 @@ public class FusionConnector : MonoBehaviour
 
     [Tooltip("Prefab for the trivia game itself.")]
     public NetworkObject triviaGamePrefab;
+    
+    [Tooltip("Prefab for the deduction game itself.")]
+    public NetworkObject deductionGamePrefab;
 
     public Transform playerContainer;
 
     [Tooltip("The message shown before starting the game.")]
     public TextMeshProUGUI preGameMessage;
+    
+    [Header("Game Mode Selection")]
+    [Tooltip("ゲームモード選択UI")]
+    public GameObject gameModeSelectionUI;
+    
+    [Tooltip("ゲームモードセレクター")]
+    public GameModeSelector gameModeSelector;
 
     public static FusionConnector Instance { get; private set; }
 
@@ -101,6 +111,12 @@ public class FusionConnector : MonoBehaviour
     {
         mainMenuObject.SetActive(true);
         mainGameObject.SetActive(false);
+        
+        // ゲームモード選択UIを表示
+        if (gameModeSelectionUI != null)
+        {
+            gameModeSelectionUI.SetActive(true);
+        }
     }
 
     public void GoToGame()
@@ -108,12 +124,17 @@ public class FusionConnector : MonoBehaviour
         mainMenuObject.SetActive(false);
         mainGameObject.SetActive(true);
         
+        // ゲームモード選択UIを非表示
+        if (gameModeSelectionUI != null)
+        {
+            gameModeSelectionUI.SetActive(false);
+        }
     }
 
     internal void OnPlayerJoin(NetworkRunner runner)
     {
-        // Only set pregame messages if the game hasn't started.
-        if (TriviaManager.TriviaManagerPresent)
+        // ゲームが既に開始されている場合は何もしない
+        if (TriviaManager.TriviaManagerPresent || DeductionGameManager.DeductionManagerPresent)
         {
             return;
         }
@@ -127,12 +148,13 @@ public class FusionConnector : MonoBehaviour
             SetPregameMessage("Waiting for master client to start game.");
         }
     }
+    
     public void SetPregameMessage(string message)
     {
         preGameMessage.text = message;
     }
 
-    public void StartTriviaGame()
+    public void StartSelectedGame()
     {
         NetworkRunner runner = null;
         // If no runner has been assigned, we cannot start the game
@@ -147,14 +169,99 @@ public class FusionConnector : MonoBehaviour
             return;
         }
 
-
-
-        // If no trivia manager has been made and we are the master mode client.
-        // Redundant but being safe.
-        if (runner.IsSharedModeMasterClient && !TriviaManager.TriviaManagerPresent)
+        // ゲームが既に開始されている場合は何もしない
+        if (runner.IsSharedModeMasterClient && 
+            (TriviaManager.TriviaManagerPresent || DeductionGameManager.DeductionManagerPresent))
         {
-            runner.Spawn(triviaGamePrefab);
+            Debug.Log("Game is already running.");
+            return;
+        }
+
+        if (runner.IsSharedModeMasterClient)
+        {
+            // 選択されたゲームモードに応じて適切なプレハブをスポーン
+            if (gameModeSelector != null)
+            {
+                switch (GameModeSelector.SelectedGameMode)
+                {
+                    case GameModeSelector.GameMode.Trivia:
+                        if (triviaGamePrefab != null)
+                        {
+                            runner.Spawn(triviaGamePrefab);
+                            Debug.Log("Trivia game started");
+                        }
+                        break;
+                        
+                    case GameModeSelector.GameMode.Deduction:
+                        if (deductionGamePrefab != null)
+                        {
+                            runner.Spawn(deductionGamePrefab);
+                            Debug.Log("Deduction game started");
+                        }
+                        break;
+                }
+            }
+            else
+            {
+                // デフォルトはトリビアゲーム
+                runner.Spawn(triviaGamePrefab);
+            }
+            
             showGameButton.SetActive(false);
+        }
+    }
+
+    // 後方互換性のため古いメソッドも残しておく
+    public void StartTriviaGame()
+    {
+        // GameModeSelectorを一時的にTriviaに設定
+        if (gameModeSelector != null)
+        {
+            gameModeSelector.SelectGameMode(GameModeSelector.GameMode.Trivia);
+        }
+        StartSelectedGame();
+    }
+
+    /// <summary>
+    /// 推理ゲームを開始
+    /// </summary>
+    public void StartDeductionGame()
+    {
+        if (gameModeSelector != null)
+        {
+            gameModeSelector.SelectGameMode(GameModeSelector.GameMode.Deduction);
+        }
+        StartSelectedGame();
+    }
+
+    /// <summary>
+    /// 現在のゲームを終了してメインメニューに戻る
+    /// </summary>
+    public async void LeaveCurrentGame()
+    {
+        NetworkRunner runner = null;
+        if (NetworkRunner.Instances.Count > 0)
+        {
+            runner = NetworkRunner.Instances[0];
+        }
+
+        if (runner != null)
+        {
+            await runner.Shutdown(true, ShutdownReason.Ok);
+        }
+
+        GoToMainMenu();
+    }
+
+    /// <summary>
+    /// ゲームモード選択UIの表示/非表示を切り替え
+    /// </summary>
+    /// <param name="show">表示するかどうか</param>
+    public void ShowGameModeSelection(bool show)
+    {
+        if (gameModeSelectionUI != null)
+        {
+            gameModeSelectionUI.SetActive(show);
         }
     }
 }

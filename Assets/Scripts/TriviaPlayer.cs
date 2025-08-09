@@ -1,6 +1,8 @@
 using Fusion;
+#if !UNITY_WEBGL
 using Photon.Voice.Fusion;
 using Photon.Voice.Unity;
+#endif
 using System.Collections;
 using System.Collections.Generic;
 using TMPro;
@@ -49,14 +51,15 @@ public class TriviaPlayer : NetworkBehaviour
     [Networked, OnChangedRender(nameof(OnMasterClientChanged))]
     public NetworkBool IsMasterClient { get; set; }
 
-
     [Tooltip("Which answer did the player choose.  0 is always the correct answer, but the answers are randomized locally.")]
     [Networked, OnChangedRender(nameof(OnAnswerChosen))]
     public int ChosenAnswer { get; set; } = -1;
 
+#if !UNITY_WEBGL
     [Tooltip("If true, the local player is muted and will not transmit voice over the network.")]
     [Networked, OnChangedRender(nameof(OnMuteChanged))]
     public NetworkBool Muted { get; set; }
+#endif
 
     #endregion
 
@@ -81,13 +84,13 @@ public class TriviaPlayer : NetworkBehaviour
     [Tooltip("Image that will turn on if the local player is the master client.")]
     public Image masterClientIcon;
 
+#if !UNITY_WEBGL
     [Tooltip("Image toggled when the local player wants to mute their mic.")]
     public Image muteSpeakerIcon;
 
     [Tooltip("Image toggled when the a player is speaking or when the local player is recording.")]
     public Image speakingIcon;
-
-
+#endif
 
     [Tooltip("The sprites used to render the character")]
     public GameObject avatarSelectableSpriteGameObject;
@@ -112,11 +115,13 @@ public class TriviaPlayer : NetworkBehaviour
     /// </summary>
     public static TriviaPlayer LocalPlayer;
 
+#if !UNITY_WEBGL
     [SerializeField, Tooltip("Reference to the voice network object that will show if a player is speaking or not.")]
     private VoiceNetworkObject _voiceNetworkObject;
 
     [SerializeField, Tooltip("Reference to the recorder for this player.")]
     private Recorder _recorder;
+#endif
 
     /// <summary>
     /// A list of all players currently in the game.
@@ -167,7 +172,9 @@ public class TriviaPlayer : NetworkBehaviour
         }
         masterClientIcon.enabled = IsMasterClient;
 
+#if !UNITY_WEBGL
         OnMuteChanged();
+#endif
 
         // Hides the avatar selector on spawn
         avatarSelectableSpriteGameObject.gameObject.SetActive(false);
@@ -275,6 +282,7 @@ public class TriviaPlayer : NetworkBehaviour
         masterClientIcon.enabled = IsMasterClient;
     }
 
+#if !UNITY_WEBGL
     public void ToggleVoiceTransmission()
     {
         if (HasStateAuthority)
@@ -293,4 +301,5 @@ public class TriviaPlayer : NetworkBehaviour
     {
         speakingIcon.enabled = (_voiceNetworkObject.SpeakerInUse && _voiceNetworkObject.IsSpeaking) || (_voiceNetworkObject.RecorderInUse && _voiceNetworkObject.IsRecording);
     }
+#endif
 }

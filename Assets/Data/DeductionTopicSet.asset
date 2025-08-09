@@ -1,0 +1,22 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 20a24df63081c4f4d88ba752391f3858, type: 3}
+  m_Name: DeductionTopicSet
+  m_EditorClassIdentifier: 
+  _topics:
+  - topicText: "\u79CB\u306B\u98DF\u3079\u305F\u3044\u3082\u306E\u3068\u3044\u3048\u3070\uFF1F"
+    availableFirstCharacters:
+    - "\u3042"
+    - "\u3044"
+    exampleAIAnswers:
+    - "\u6817"
+    - "\u828B"
