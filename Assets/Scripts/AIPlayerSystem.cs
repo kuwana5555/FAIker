@@ -110,12 +110,15 @@ public static class AIPlayerSystem
         // マッチする回答がない場合は汎用的な回答を生成
         if (matchingAnswers.Count == 0)
         {
+            Debug.LogWarning($"[AIPlayer] No pattern found for topic '{topicText}' with character '{firstCharacter}', generating generic answer");
             return GenerateGenericAnswer(firstCharacter);
         }
 
         // ランダムに選択して返す
         int randomIndex = Random.Range(0, matchingAnswers.Count);
-        return matchingAnswers[randomIndex];
+        string selectedAnswer = matchingAnswers[randomIndex];
+        Debug.Log($"[AIPlayer] Generated answer: '{selectedAnswer}' for topic '{topicText}' with character '{firstCharacter}'");
+        return selectedAnswer;
     }
 
     /// <summary>
@@ -125,13 +128,13 @@ public static class AIPlayerSystem
     /// <returns>汎用AI回答</returns>
     private static string GenerateGenericAnswer(string firstCharacter)
     {
-        // 汎用的な単語の後ろ部分
+        // より自然な汎用的な単語の後ろ部分
         string[] genericEndings = {
-            "んど", "んぐ", "んた", "んせい", "んか", "んしょう",
-            "いと", "いす", "いん", "いき", "いち", "いしょう",
-            "うと", "うす", "うん", "うき", "うち", "うしょう",
-            "えと", "えす", "えん", "えき", "えち", "えしょう",
-            "おと", "おす", "おん", "おき", "おち", "おしょう"
+            "めん", "きもの", "ぜん", "べん", "ぽん", "みず",
+            "らし", "すき", "のみ", "ぎり", "ちゃ", "しお",
+            "いろ", "おと", "かぜ", "ひかり", "みち", "そら",
+            "やま", "うみ", "はな", "きのこ", "さくら", "つき",
+            "ほし", "ゆめ", "あさ", "よる", "なつ", "ふゆ"
         };
 
         string randomEnding = genericEndings[Random.Range(0, genericEndings.Length)];

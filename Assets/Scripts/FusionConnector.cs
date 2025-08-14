@@ -179,6 +179,12 @@ public class FusionConnector : MonoBehaviour
 
         if (runner.IsSharedModeMasterClient)
         {
+            // デバッグ情報を追加
+            Debug.Log($"StartSelectedGame called. GameModeSelector: {gameModeSelector != null}");
+            Debug.Log($"Current selected mode: {GameModeSelector.SelectedGameMode}");
+            Debug.Log($"DeductionGamePrefab assigned: {deductionGamePrefab != null}");
+            Debug.Log($"TriviaGamePrefab assigned: {triviaGamePrefab != null}");
+            
             // 選択されたゲームモードに応じて適切なプレハブをスポーン
             if (gameModeSelector != null)
             {
@@ -190,6 +196,10 @@ public class FusionConnector : MonoBehaviour
                             runner.Spawn(triviaGamePrefab);
                             Debug.Log("Trivia game started");
                         }
+                        else
+                        {
+                            Debug.LogError("TriviaGamePrefab is not assigned!");
+                        }
                         break;
                         
                     case GameModeSelector.GameMode.Deduction:
@@ -198,22 +208,30 @@ public class FusionConnector : MonoBehaviour
                             runner.Spawn(deductionGamePrefab);
                             Debug.Log("Deduction game started");
                         }
+                        else
+                        {
+                            Debug.LogError("DeductionGamePrefab is not assigned!");
+                        }
                         break;
                 }
             }
             else
             {
-                // デフォルトはトリビアゲーム
-                runner.Spawn(triviaGamePrefab);
+                Debug.LogWarning("GameModeSelector is null, using default Trivia game");
+                if (triviaGamePrefab != null)
+                {
+                    runner.Spawn(triviaGamePrefab);
+                }
             }
             
             showGameButton.SetActive(false);
         }
     }
 
-    // 後方互換性のため古いメソッドも残しておく
+    // 後方互換性のため古いメソッドも残しておく（デバッグ用のログ追加）
     public void StartTriviaGame()
     {
+        Debug.LogWarning("StartTriviaGame() is deprecated. Use StartSelectedGame() instead.");
         // GameModeSelectorを一時的にTriviaに設定
         if (gameModeSelector != null)
         {

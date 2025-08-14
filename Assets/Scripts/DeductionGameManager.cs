@@ -57,6 +57,14 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
     // プレイヤーの投票を格納
     [Networked, Capacity(20)]
     public NetworkArray<int> PlayerVotes => default;
+    
+    // 投票フィールドに表示される回答（シャッフル済み、4つ固定）
+    [Networked, Capacity(4)]
+    public NetworkArray<NetworkString<_64>> ShuffledAnswersForVoting => default;
+    
+    // 各投票フィールドに対応する元のプレイヤーインデックス（-1はAI回答）
+    [Networked, Capacity(4)]
+    public NetworkArray<int> VoteFieldPlayerMapping => default;
 
     #endregion
 
@@ -96,32 +104,64 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
 
     #region 推理ゲーム専用UI
     
-    [Header("Deduction Game Specific UI")]
+        [Header("Deduction Game Specific UI")]
     [Tooltip("回答入力フィールド")]
     public TMP_InputField answerInputField;
-    
+
     [Tooltip("回答送信ボタン")]
     public Button submitAnswerButton;
-    
+
     [Tooltip("最初の文字表示用テキスト")]
     public TextMeshProUGUI firstCharacterText;
-    
-    [Tooltip("親プレイヤー用のAI回答表示エリア")]
-    public GameObject aiAnswerDisplayArea;
-    
-    [Tooltip("AI回答表示用テキスト")]
-    public TextMeshProUGUI aiAnswerText;
 
-    [Tooltip("投票フェーズのUI")]
+    [Tooltip("親プレイヤー用のAI回答入力エリア")]
+    public GameObject aiAnswerInputArea;
+
+    [Tooltip("親プレイヤー用のAI回答入力フィールド")]
+    public TMP_InputField aiAnswerInputField;
+
+    [Tooltip("親プレイヤー用の自分の回答入力フィールド")]
+    public TMP_InputField parentAnswerInputField;
+
+    [Tooltip("親プレイヤーの両回答送信ボタン")]
+    public Button submitBothAnswersButton;
+
+        [Tooltip("投票フェーズのUI")]
     public GameObject votingUI;
     
-    [Tooltip("投票ボタンのプレハブ")]
-    public Button voteButtonPrefab;
+    [Header("Fixed Voting Fields (4 slots)")]
+    [Tooltip("投票フィールド1のテキスト")]
+    public TextMeshProUGUI voteField1Text;
     
-    [Tooltip("投票ボタンの親オブジェクト")]
-    public Transform voteButtonContainer;
+    [Tooltip("投票フィールド1のボタン")]
+    public Button voteField1Button;
+    
+    [Tooltip("投票フィールド2のテキスト")]
+    public TextMeshProUGUI voteField2Text;
+    
+    [Tooltip("投票フィールド2のボタン")]
+    public Button voteField2Button;
+    
+    [Tooltip("投票フィールド3のテキスト")]
+    public TextMeshProUGUI voteField3Text;
+    
+    [Tooltip("投票フィールド3のボタン")]
+    public Button voteField3Button;
+    
+    [Tooltip("投票フィールド4のテキスト")]
+    public TextMeshProUGUI voteField4Text;
+    
+    [Tooltip("投票フィールド4のボタン")]
+    public Button voteField4Button;
 
     #endregion
+
+    [Header("Results Phase UI")]
+    [Tooltip("Results表示専用のUIパネル（Resultsフェーズでのみアクティブ）")]
+    public GameObject resultsUI;
+    
+    [Tooltip("Results表示用のテキスト（結果内容を表示）")]
+    public TextMeshProUGUI resultsText;
 
     [Header("Game Rules - TriviaManagerと同じ構造")]
     [Tooltip("The maximum number of rounds to play.")]
@@ -160,7 +200,7 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
     public enum DeductionGameState : byte
     {
         Intro = 0,
-        AnswerPhase = 1,
+        AnswerPhase = 1,      // 全プレイヤーが同時に回答を入力（親は2つ、子は1つ）
         VotingPhase = 2,
         Results = 3,
         GameOver = 4,
@@ -187,6 +227,21 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
         // 権限を持つクライアントが初期設定を行う
         if (HasStateAuthority)
         {
+            // タイマー設定のデバッグ
+            Debug.Log($"[PhaseCheck] Initial timer settings - answerTime: {answerTime}, votingTime: {votingTime}");
+            
+            // answerTimeが0の場合はデフォルト値を設定
+            if (answerTime <= 0)
+            {
+                answerTime = 60f;
+                Debug.LogWarning("[PhaseCheck] answerTime was 0, setting to default 60 seconds");
+            }
+            if (votingTime <= 0)
+            {
+                votingTime = 30f;
+                Debug.LogWarning("[PhaseCheck] votingTime was 0, setting to default 30 seconds");
+            }
+            
             timerLength = 3f;
             timer = TickTimer.CreateFromSeconds(Runner, timerLength);
             CurrentRound = 0;
@@ -207,7 +262,7 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
         UpdateFirstCharacter();
         UpdateParentPlayer();
 
-        Debug.Log("DeductionGameManager spawned");
+        Debug.Log("[PhaseCheck] DeductionGameManager spawned");
     }
 
     public override void Despawned(NetworkRunner runner, bool hasState)
@@ -219,16 +274,46 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
     {
         // 初期状態の設定
         if (votingUI != null) votingUI.SetActive(false);
-        if (aiAnswerDisplayArea != null) aiAnswerDisplayArea.SetActive(false);
+        if (aiAnswerInputArea != null) aiAnswerInputArea.SetActive(false);
         if (answerInputField != null) answerInputField.gameObject.SetActive(false);
         if (submitAnswerButton != null) 
         {
             submitAnswerButton.gameObject.SetActive(false);
             submitAnswerButton.onClick.AddListener(SubmitAnswer);
         }
+        
+        // 親プレイヤー用UI初期化
+        if (aiAnswerInputField != null) aiAnswerInputField.gameObject.SetActive(false);
+        if (parentAnswerInputField != null) parentAnswerInputField.gameObject.SetActive(false);
+        if (submitBothAnswersButton != null)
+        {
+            submitBothAnswersButton.gameObject.SetActive(false);
+            submitBothAnswersButton.onClick.RemoveAllListeners(); // 既存リスナーをクリア
+            submitBothAnswersButton.onClick.AddListener(TestButtonClick); // テスト用メソッドを使用
+            Debug.Log("[PhaseCheck] SubmitBothAnswersButton onClick event connected to TestButtonClick");
+        }
+        else
+        {
+            Debug.LogError("[PhaseCheck] SubmitBothAnswersButton is null! Check Inspector assignment.");
+        }
+
+        // Results UI初期化
+        if (resultsUI != null) resultsUI.SetActive(false);
+        Debug.Log("[PhaseCheck] Results UI initialized as inactive");
 
         // 既存のUI要素を非表示
         if (questionElements != null) questionElements.SetActive(false);
+        
+        // 投票フィールドのボタンイベント設定
+        InitializeVoteButtons();
+    }
+    
+    private void InitializeVoteButtons()
+    {
+        if (voteField1Button != null) voteField1Button.onClick.AddListener(() => VoteForField(0));
+        if (voteField2Button != null) voteField2Button.onClick.AddListener(() => VoteForField(1));
+        if (voteField3Button != null) voteField3Button.onClick.AddListener(() => VoteForField(2));
+        if (voteField4Button != null) voteField4Button.onClick.AddListener(() => VoteForField(3));
     }
 
     private void SelectParentPlayer()
@@ -260,6 +345,9 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
                     
                 case DeductionGameState.AnswerPhase:
                     // 回答フェーズ終了 → 投票フェーズ
+                    Debug.Log("[PhaseCheck] AnswerPhase timer expired, moving to VotingPhase");
+                    Debug.Log($"[PhaseCheck] Answer phase lasted: {answerTime} seconds");
+                    PrepareVotingFields(); // 投票フィールドの準備
                     GameState = DeductionGameState.VotingPhase;
                     timerLength = votingTime;
                     timer = TickTimer.CreateFromSeconds(Runner, timerLength);
@@ -268,24 +356,30 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
                 case DeductionGameState.VotingPhase:
                     // 投票フェーズ終了 → 結果表示
                     CalculateResults();
+                    Debug.Log($"[PhaseCheck] Transitioning to Results - CurrentRound: {CurrentRound}, maxRounds: {maxRounds}");
                     GameState = DeductionGameState.Results;
                     timerLength = 5f;
                     timer = TickTimer.CreateFromSeconds(Runner, timerLength);
+                    Debug.Log($"[PhaseCheck] Results timer set to {timerLength} seconds");
                     break;
                     
                 case DeductionGameState.Results:
-                    // 結果表示終了
+                    // 結果表示終了（5秒間表示後に次のラウンドまたはゲーム終了）
+                    Debug.Log("[PhaseCheck] Results phase timer expired");
                     if (CurrentRound >= maxRounds)
                     {
+                        Debug.Log("[PhaseCheck] All rounds completed, transitioning to GameOver");
                         GameState = DeductionGameState.GameOver;
                     }
                     else
                     {
+                        Debug.Log($"[PhaseCheck] Round {CurrentRound}/{maxRounds} completed, starting next round");
                         // 次のラウンドの親プレイヤーを選択
                         var players = TriviaPlayer.TriviaPlayerRefs;
                         if (players.Count > 0)
                         {
                             ParentPlayerIndex = (ParentPlayerIndex + 1) % players.Count;
+                            Debug.Log($"[PhaseCheck] New parent player index: {ParentPlayerIndex}");
                         }
                         StartNewRound();
                     }
@@ -309,18 +403,30 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
                 CurrentTopic = topic.topicText;
                 CurrentFirstCharacter = deductionTopics.GetRandomFirstCharacter(topic);
                 
-                // AI回答を生成
-                AIAnswer = AIPlayerSystem.GenerateAIAnswer(topic.topicText, CurrentFirstCharacter.Value);
+                // AI回答は親プレイヤーが手動で入力するため、空にする
+                AIAnswer = "";
+                Debug.Log($"[PhaseCheck] Topic: {CurrentTopic.Value}, First char: {CurrentFirstCharacter.Value}");
+                Debug.Log("[PhaseCheck] AI answer will be manually input by parent player");
             }
         }
 
         // プレイヤーデータをリセット
         ClearPlayerData();
 
+        // 新ラウンド開始時にResults UIを非表示
+        if (resultsUI != null) 
+        {
+            resultsUI.SetActive(false);
+            Debug.Log("[PhaseCheck] Results UI deactivated for new round");
+        }
+
         // 回答フェーズ開始
+        Debug.Log("[PhaseCheck] Transitioning to AnswerPhase from StartNewRound");
+        Debug.Log($"[PhaseCheck] Answer time: {answerTime} seconds");
         GameState = DeductionGameState.AnswerPhase;
         timerLength = answerTime;
         timer = TickTimer.CreateFromSeconds(Runner, timerLength);
+        Debug.Log($"[PhaseCheck] Timer set to: {timerLength} seconds");
     }
 
     private void ClearPlayerData()
@@ -332,6 +438,17 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
             PlayerAnswers.Set(i, "");
             PlayerVotes.Set(i, -1);
         }
+        
+        // 投票フィールドデータもリセット
+        for (int i = 0; i < ShuffledAnswersForVoting.Length; i++)
+        {
+            ShuffledAnswersForVoting.Set(i, "");
+        }
+        
+        for (int i = 0; i < VoteFieldPlayerMapping.Length; i++)
+        {
+            VoteFieldPlayerMapping.Set(i, -2); // -2 = 空のフィールド
+        }
 
         // プレイヤーの状態もリセット
         var players = TriviaPlayer.TriviaPlayerRefs;
@@ -339,6 +456,72 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
         {
             player.ChosenAnswer = -1; // 回答リセット用に再利用
         }
+    }
+    
+    private void PrepareVotingFields()
+    {
+        if (!HasStateAuthority) return;
+        
+        Debug.Log("[PhaseCheck] Preparing voting fields with shuffled answers");
+        Debug.Log($"[PhaseCheck] Current AIAnswer: '{AIAnswer.Value}'");
+        Debug.Log($"[PhaseCheck] PlayerAnswers array length: {PlayerAnswers.Length}");
+        
+        // 全ての回答を収集
+        List<(string answer, int playerIndex)> allAnswers = new List<(string, int)>();
+        
+        // AI回答を追加（playerIndex = -1）
+        if (!string.IsNullOrEmpty(AIAnswer.Value))
+        {
+            allAnswers.Add((AIAnswer.Value, -1));
+            Debug.Log($"[PhaseCheck] Added AI answer: '{AIAnswer.Value}'");
+        }
+        else
+        {
+            Debug.LogWarning($"[PhaseCheck] AI Answer is empty: '{AIAnswer.Value}'");
+        }
+        
+        // プレイヤー回答を追加
+        for (int i = 0; i < PlayerAnswers.Length; i++)
+        {
+            Debug.Log($"[PhaseCheck] Checking PlayerAnswers[{i}]: '{PlayerAnswers[i].Value}'");
+            if (!string.IsNullOrEmpty(PlayerAnswers[i].Value))
+            {
+                allAnswers.Add((PlayerAnswers[i].Value, i));
+                Debug.Log($"[PhaseCheck] Added player {i} answer: '{PlayerAnswers[i].Value}'");
+            }
+        }
+        
+        Debug.Log($"[PhaseCheck] Total answers collected: {allAnswers.Count}");
+        
+        // 回答をシャッフル
+        for (int i = allAnswers.Count - 1; i > 0; i--)
+        {
+            int randomIndex = Random.Range(0, i + 1);
+            var temp = allAnswers[i];
+            allAnswers[i] = allAnswers[randomIndex];
+            allAnswers[randomIndex] = temp;
+        }
+        
+        // 4つのフィールドに配置
+        for (int fieldIndex = 0; fieldIndex < 4; fieldIndex++)
+        {
+            if (fieldIndex < allAnswers.Count)
+            {
+                // 回答がある場合
+                ShuffledAnswersForVoting.Set(fieldIndex, allAnswers[fieldIndex].answer);
+                VoteFieldPlayerMapping.Set(fieldIndex, allAnswers[fieldIndex].playerIndex);
+                Debug.Log($"[PhaseCheck] Field {fieldIndex}: '{allAnswers[fieldIndex].answer}' (Player {allAnswers[fieldIndex].playerIndex})");
+            }
+            else
+            {
+                // 空のフィールド
+                ShuffledAnswersForVoting.Set(fieldIndex, "");
+                VoteFieldPlayerMapping.Set(fieldIndex, -2); // -2 = 空のフィールド
+                Debug.Log($"[PhaseCheck] Field {fieldIndex}: Empty");
+            }
+        }
+        
+        Debug.Log($"[PhaseCheck] Prepared {allAnswers.Count} answers in voting fields");
     }
 
     /// <summary>
@@ -404,7 +587,126 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
         }
     }
 
-    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    // テスト用：ボタンが正しく動作するかの確認
+    public void TestButtonClick()
+    {
+        Debug.Log("[PhaseCheck] *** TEST BUTTON CLICKED - EVENT SYSTEM WORKS ***");
+        SubmitBothAnswers();
+    }
+    
+    public void SubmitBothAnswers()
+    {
+        Debug.Log($"[PhaseCheck] *** SubmitBothAnswers METHOD CALLED ***");
+        Debug.Log($"[PhaseCheck] SubmitBothAnswers called - GameState: {GameState}");
+        
+        if (GameState != DeductionGameState.AnswerPhase) 
+        {
+            Debug.LogWarning($"[PhaseCheck] Wrong game state for submission: {GameState}");
+            return;
+        }
+        
+        if (aiAnswerInputField == null || parentAnswerInputField == null) 
+        {
+            Debug.LogError($"[PhaseCheck] Input fields are null - AI: {aiAnswerInputField == null}, Parent: {parentAnswerInputField == null}");
+            return;
+        }
+        
+        string aiAnswer = aiAnswerInputField.text.Trim();
+        string parentAnswer = parentAnswerInputField.text.Trim();
+        
+        Debug.Log($"[PhaseCheck] Input values - AI: '{aiAnswer}', Parent: '{parentAnswer}'");
+        
+        // 両方の回答が入力されているかチェック
+        if (string.IsNullOrEmpty(aiAnswer))
+        {
+            Debug.LogWarning("[PhaseCheck] AI Answer is empty!");
+            if (_errorSFX != null) _errorSFX.Play();
+            return;
+        }
+        
+        if (string.IsNullOrEmpty(parentAnswer))
+        {
+            Debug.LogWarning("[PhaseCheck] Parent Answer is empty!");
+            if (_errorSFX != null) _errorSFX.Play();
+            return;
+        }
+        
+        // 最初の文字チェック
+        if (!aiAnswer.StartsWith(CurrentFirstCharacter.Value))
+        {
+            if (_errorSFX != null) _errorSFX.Play();
+            Debug.LogWarning($"[PhaseCheck] AI Answer must start with: {CurrentFirstCharacter.Value}, got: {aiAnswer}");
+            return;
+        }
+        
+        if (!parentAnswer.StartsWith(CurrentFirstCharacter.Value))
+        {
+            if (_errorSFX != null) _errorSFX.Play();
+            Debug.LogWarning($"[PhaseCheck] Parent Answer must start with: {CurrentFirstCharacter.Value}, got: {parentAnswer}");
+            return;
+        }
+        
+        var localPlayer = TriviaPlayer.LocalPlayer;
+        bool isParent = localPlayer != null && 
+                       TriviaPlayer.TriviaPlayerRefs.IndexOf(localPlayer) == ParentPlayerIndex;
+        
+        Debug.Log($"[PhaseCheck] Player check - LocalPlayer: {localPlayer != null}, IsParent: {isParent}, HasInputAuthority: {HasInputAuthority}");
+        
+        if (isParent)
+        {
+            // AI回答と親プレイヤーの回答を同時に送信
+            int playerIndex = TriviaPlayer.TriviaPlayerRefs.IndexOf(localPlayer);
+            Debug.Log($"[PhaseCheck] ATTEMPTING RPC SEND - PlayerIndex: {playerIndex}, HasInputAuthority: {HasInputAuthority}");
+            
+            try
+            {
+                RPC_SubmitBothAnswers(aiAnswer, playerIndex, parentAnswer);
+                Debug.Log($"[PhaseCheck] RPC SENT SUCCESSFULLY - AI: '{aiAnswer}', Parent[{playerIndex}]: '{parentAnswer}'");
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[PhaseCheck] RPC SEND FAILED: {e.Message}");
+            }
+            
+            if (_confirmSFX != null) _confirmSFX.Play();
+            
+            // UI更新
+            aiAnswerInputField.text = "";
+            parentAnswerInputField.text = "";
+            aiAnswerInputField.gameObject.SetActive(false);
+            parentAnswerInputField.gameObject.SetActive(false);
+            submitBothAnswersButton.gameObject.SetActive(false);
+        }
+        else
+        {
+            Debug.LogWarning($"[PhaseCheck] Cannot submit - Not parent player. IsParent: {isParent}");
+        }
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_SubmitBothAnswers(string aiAnswer, int parentPlayerIndex, string parentAnswer)
+    {
+        Debug.Log($"[PhaseCheck] RPC_SubmitBothAnswers received - AI: '{aiAnswer}', Parent[{parentPlayerIndex}]: '{parentAnswer}'");
+        
+        // AI回答を設定
+        AIAnswer = aiAnswer;
+        Debug.Log($"[PhaseCheck] AI Answer set to: '{AIAnswer.Value}'");
+        
+        // 親プレイヤーの回答を設定
+        if (parentPlayerIndex >= 0 && parentPlayerIndex < PlayerAnswers.Length)
+        {
+            PlayerAnswers.Set(parentPlayerIndex, parentAnswer);
+            Debug.Log($"[PhaseCheck] Parent answer set at index {parentPlayerIndex}: '{PlayerAnswers[parentPlayerIndex].Value}'");
+        }
+        else
+        {
+            Debug.LogError($"[PhaseCheck] Invalid parent player index: {parentPlayerIndex}, array length: {PlayerAnswers.Length}");
+        }
+        
+        Debug.Log($"[PhaseCheck] Both answers stored successfully");
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     public void RPC_SubmitAnswer(int playerIndex, string answer)
     {
         if (playerIndex >= 0 && playerIndex < PlayerAnswers.Length)
@@ -432,13 +734,13 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
         DisableVoteButtons();
     }
 
-    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
-    public void RPC_SubmitVote(int playerIndex, int targetPlayerIndex)
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_SubmitVote(int playerIndex, int fieldIndex)
     {
         if (playerIndex >= 0 && playerIndex < PlayerVotes.Length)
         {
-            PlayerVotes.Set(playerIndex, targetPlayerIndex);
-            Debug.Log($"Vote received from player {playerIndex} for player {targetPlayerIndex}");
+            PlayerVotes.Set(playerIndex, fieldIndex);
+            Debug.Log($"[PhaseCheck] Player {playerIndex} voted for field {fieldIndex}");
         }
     }
 
@@ -501,39 +803,52 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
 
     private void OnDeductionGameStateChanged()
     {
+        Debug.Log($"[PhaseCheck] Game state changed to: {GameState}");
+        
         switch (GameState)
         {
             case DeductionGameState.Intro:
+                Debug.Log("[PhaseCheck] Showing Intro state");
                 triviaMessage.text = "推理ゲーム開始\nまもなく最初のラウンドが始まります";
                 if (questionElements != null) questionElements.SetActive(false);
                 if (votingUI != null) votingUI.SetActive(false);
+                if (resultsUI != null) resultsUI.SetActive(false); // Results UI非表示
                 if (endGameObject != null) endGameObject.Hide();
                 break;
                 
+
+                
             case DeductionGameState.AnswerPhase:
+                Debug.Log("[PhaseCheck] Transitioning to Answer Phase");
                 ShowAnswerPhase();
                 break;
                 
             case DeductionGameState.VotingPhase:
+                Debug.Log("[PhaseCheck] Transitioning to Voting Phase");
                 ShowVotingPhase();
                 break;
                 
             case DeductionGameState.Results:
+                Debug.Log("[PhaseCheck] Transitioning to Results Phase");
                 ShowResults();
                 break;
                 
             case DeductionGameState.GameOver:
+                Debug.Log("[PhaseCheck] Transitioning to Game Over");
                 ShowGameOver();
                 break;
         }
     }
 
+
+
     private void ShowAnswerPhase()
     {
-        triviaMessage.text = "回答フェーズ";
+        Debug.Log("[PhaseCheck] ShowAnswerPhase called - Simultaneous answering for all players");
         
         if (questionElements != null) questionElements.SetActive(true);
         if (votingUI != null) votingUI.SetActive(false);
+        if (resultsUI != null) resultsUI.SetActive(false); // Results UI非表示
         
         var localPlayer = TriviaPlayer.LocalPlayer;
         bool isParent = localPlayer != null && 
@@ -541,108 +856,262 @@ public class DeductionGameManager : NetworkBehaviour, IStateAuthorityChanged
         
         if (isParent)
         {
-            // 親プレイヤーにAI回答を表示
-            if (aiAnswerDisplayArea != null) aiAnswerDisplayArea.SetActive(true);
-            if (aiAnswerText != null) aiAnswerText.text = $"AI回答: {AIAnswer.Value}\n（この回答に似せて答えてください）";
+            // 親プレイヤー：AI回答と自分の回答の両方を入力
+            triviaMessage.text = "回答フェーズ - AI回答と自分の回答を入力してください";
+            
+            // 親プレイヤー専用UI表示
+            if (aiAnswerInputArea != null) aiAnswerInputArea.SetActive(true);
+            
+            // AI回答入力フィールド
+            if (aiAnswerInputField != null) 
+            {
+                aiAnswerInputField.gameObject.SetActive(true);
+                aiAnswerInputField.text = "";
+                aiAnswerInputField.placeholder.GetComponent<TextMeshProUGUI>().text = "AI回答を入力...";
+            }
+            
+            // 親プレイヤーの回答入力フィールド
+            if (parentAnswerInputField != null)
+            {
+                parentAnswerInputField.gameObject.SetActive(true);
+                parentAnswerInputField.text = "";
+                parentAnswerInputField.placeholder.GetComponent<TextMeshProUGUI>().text = "あなたの回答を入力...";
+            }
+            
+            // 両方送信ボタン
+            if (submitBothAnswersButton != null) 
+            {
+                submitBothAnswersButton.gameObject.SetActive(true);
+                Debug.Log($"[PhaseCheck] SubmitBothAnswersButton activated - Interactable: {submitBothAnswersButton.interactable}");
+                Debug.Log($"[PhaseCheck] SubmitBothAnswersButton listeners count: {submitBothAnswersButton.onClick.GetPersistentEventCount()}");
+            }
+            else
+            {
+                Debug.LogError("[PhaseCheck] SubmitBothAnswersButton is null in ShowAnswerPhase!");
+            }
+            
+            // 通常の回答UIは非表示
+            if (answerInputField != null) answerInputField.gameObject.SetActive(false);
+            if (submitAnswerButton != null) submitAnswerButton.gameObject.SetActive(false);
+            
+            Debug.Log("[PhaseCheck] Parent UI activated - AI answer field and parent answer field");
         }
         else
         {
-            if (aiAnswerDisplayArea != null) aiAnswerDisplayArea.SetActive(false);
+            // 子プレイヤー：通常の回答入力のみ
+            triviaMessage.text = "回答フェーズ - お題に回答してください";
+            
+            // 親プレイヤー専用UIは非表示
+            if (aiAnswerInputArea != null) aiAnswerInputArea.SetActive(false);
+            
+            // 通常の回答UI表示
+            Debug.Log($"[PhaseCheck] AnswerInputField null: {answerInputField == null}");
+            Debug.Log($"[PhaseCheck] SubmitAnswerButton null: {submitAnswerButton == null}");
+            
+            if (answerInputField != null) 
+            {
+                answerInputField.gameObject.SetActive(true);
+                answerInputField.text = "";
+                Debug.Log("[PhaseCheck] AnswerInputField activated for child player");
+            }
+            else
+            {
+                Debug.LogError("[PhaseCheck] AnswerInputField is null! Check Inspector settings.");
+            }
+            
+            if (submitAnswerButton != null) 
+            {
+                submitAnswerButton.gameObject.SetActive(true);
+                Debug.Log("[PhaseCheck] SubmitAnswerButton activated for child player");
+            }
+            else
+            {
+                Debug.LogError("[PhaseCheck] SubmitAnswerButton is null! Check Inspector settings.");
+            }
         }
-        
-        // 回答入力UIを表示
-        if (answerInputField != null) 
-        {
-            answerInputField.gameObject.SetActive(true);
-            answerInputField.text = "";
-        }
-        if (submitAnswerButton != null) submitAnswerButton.gameObject.SetActive(true);
     }
 
     private void ShowVotingPhase()
     {
+        Debug.Log("[PhaseCheck] ShowVotingPhase called");
         triviaMessage.text = "投票フェーズ - AIの回答だと思うものを選んでください";
         
+        // 全ての回答入力UIを非表示
         if (answerInputField != null) answerInputField.gameObject.SetActive(false);
         if (submitAnswerButton != null) submitAnswerButton.gameObject.SetActive(false);
-        if (aiAnswerDisplayArea != null) aiAnswerDisplayArea.SetActive(false);
+        
+        // 親プレイヤー専用UIを完全に非表示
+        if (aiAnswerInputArea != null) aiAnswerInputArea.SetActive(false);
+        if (aiAnswerInputField != null) aiAnswerInputField.gameObject.SetActive(false);
+        if (parentAnswerInputField != null) parentAnswerInputField.gameObject.SetActive(false);
+        if (submitBothAnswersButton != null) submitBothAnswersButton.gameObject.SetActive(false);
+        
+        // Results UI非表示
+        if (resultsUI != null) resultsUI.SetActive(false);
+        
+        Debug.Log("[PhaseCheck] All answer input UI elements hidden");
+        
         if (votingUI != null) votingUI.SetActive(true);
         
-        CreateVoteButtons();
+        UpdateVotingFields();
+    }
+    
+    private void UpdateVotingFields()
+    {
+        Debug.Log("[PhaseCheck] Updating voting fields display");
+        
+        // フィールド1
+        if (voteField1Text != null)
+        {
+            voteField1Text.text = ShuffledAnswersForVoting[0].Value;
+        }
+        if (voteField1Button != null)
+        {
+            voteField1Button.gameObject.SetActive(!string.IsNullOrEmpty(ShuffledAnswersForVoting[0].Value));
+        }
+        
+        // フィールド2
+        if (voteField2Text != null)
+        {
+            voteField2Text.text = ShuffledAnswersForVoting[1].Value;
+        }
+        if (voteField2Button != null)
+        {
+            voteField2Button.gameObject.SetActive(!string.IsNullOrEmpty(ShuffledAnswersForVoting[1].Value));
+        }
+        
+        // フィールド3
+        if (voteField3Text != null)
+        {
+            voteField3Text.text = ShuffledAnswersForVoting[2].Value;
+        }
+        if (voteField3Button != null)
+        {
+            voteField3Button.gameObject.SetActive(!string.IsNullOrEmpty(ShuffledAnswersForVoting[2].Value));
+        }
+        
+        // フィールド4
+        if (voteField4Text != null)
+        {
+            voteField4Text.text = ShuffledAnswersForVoting[3].Value;
+        }
+        if (voteField4Button != null)
+        {
+            voteField4Button.gameObject.SetActive(!string.IsNullOrEmpty(ShuffledAnswersForVoting[3].Value));
+        }
+        
+        Debug.Log($"[PhaseCheck] Updated voting fields: '{ShuffledAnswersForVoting[0].Value}', '{ShuffledAnswersForVoting[1].Value}', '{ShuffledAnswersForVoting[2].Value}', '{ShuffledAnswersForVoting[3].Value}'");
+    }
+    
+    public void VoteForField(int fieldIndex)
+    {
+        if (GameState != DeductionGameState.VotingPhase) return;
+        if (fieldIndex < 0 || fieldIndex >= 4) return;
+        if (string.IsNullOrEmpty(ShuffledAnswersForVoting[fieldIndex].Value)) return;
+        
+        var localPlayer = TriviaPlayer.LocalPlayer;
+        if (localPlayer == null) return;
+        
+        // 親プレイヤーは投票できない
+        bool isParent = TriviaPlayer.TriviaPlayerRefs.IndexOf(localPlayer) == ParentPlayerIndex;
+        if (isParent)
+        {
+            Debug.Log("[PhaseCheck] Parent player cannot vote");
+            if (_errorSFX != null) _errorSFX.Play();
+            return;
+        }
+        
+        int playerIndex = TriviaPlayer.TriviaPlayerRefs.IndexOf(localPlayer);
+        if (playerIndex >= 0 && HasInputAuthority)
+        {
+            // フィールドに投票（フィールドインデックスを保存）
+            RPC_SubmitVote(playerIndex, fieldIndex);
+            Debug.Log($"[PhaseCheck] Player {playerIndex} voted for field {fieldIndex}: '{ShuffledAnswersForVoting[fieldIndex].Value}'");
+            
+            if (_confirmSFX != null) _confirmSFX.Play();
+        }
     }
 
-    private void CreateVoteButtons()
-    {
-        if (voteButtonPrefab == null || voteButtonContainer == null) return;
-        
-        // 既存のボタンをクリア
-        foreach (var button in voteButtons)
-        {
-            if (button != null)
-                DestroyImmediate(button.gameObject);
-        }
-        voteButtons.Clear();
-        
-        var players = TriviaPlayer.TriviaPlayerRefs;
-        var localPlayer = TriviaPlayer.LocalPlayer;
-        int localPlayerIndex = players.IndexOf(localPlayer);
-        
-        for (int i = 0; i < players.Count; i++)
-        {
-            if (i == localPlayerIndex) continue; // 自分には投票できない
-            
-            var button = Instantiate(voteButtonPrefab, voteButtonContainer);
-            var playerName = players[i].PlayerName.Value;
-            var playerAnswer = PlayerAnswers[i].Value;
-            
-            button.GetComponentInChildren<TextMeshProUGUI>().text = $"{playerName}: {playerAnswer}";
-            
-            int playerIndex = i; // クロージャ用
-            button.onClick.AddListener(() => SubmitVote(playerIndex));
-            
-            voteButtons.Add(button);
-        }
-    }
+
 
     private void ShowResults()
     {
-        triviaMessage.text = "結果発表";
+        Debug.Log("[PhaseCheck] ShowResults called");
         
+        // 他のUIを非表示
         if (votingUI != null) votingUI.SetActive(false);
-        if (questionElements != null) questionElements.SetActive(true);
+        if (questionElements != null) questionElements.SetActive(false);
+        if (aiAnswerInputArea != null) aiAnswerInputArea.SetActive(false);
         
-        // 結果表示の詳細をTriviaManagerのパターンで実装
+        // Inspector設定の詳細デバッグ
+        Debug.Log($"[PhaseCheck] resultsUI null check: {(resultsUI == null ? "NULL" : "NOT NULL")}");
+        Debug.Log($"[PhaseCheck] resultsText null check: {(resultsText == null ? "NULL" : "NOT NULL")}");
+        if (resultsUI != null)
+        {
+            Debug.Log($"[PhaseCheck] resultsUI name: {resultsUI.name}");
+            Debug.Log($"[PhaseCheck] resultsUI activeInHierarchy before: {resultsUI.activeInHierarchy}");
+        }
+        
+        // Results専用UIを表示
+        if (resultsUI != null) 
+        {
+            resultsUI.SetActive(true);
+            Debug.Log($"[PhaseCheck] resultsUI activeInHierarchy after: {resultsUI.activeInHierarchy}");
+            Debug.Log("[PhaseCheck] Results UI activated");
+        }
+        else
+        {
+            Debug.LogError("[PhaseCheck] resultsUI is NULL! Check Inspector settings.");
+            // フォールバック: questionElementsを使用
+            if (questionElements != null) 
+            {
+                questionElements.SetActive(true);
+                Debug.Log("[PhaseCheck] Using questionElements as fallback for results display");
+            }
+        }
+        
+        // 結果表示の詳細を実装
         DisplayRoundResults();
     }
 
     private void DisplayRoundResults()
     {
-        var players = TriviaPlayer.TriviaPlayerRefs;
-        string results = $"ラウンド {CurrentRound} 結果\n\n";
-        results += $"お題: {CurrentTopic.Value}\n";
-        results += $"最初の文字: {CurrentFirstCharacter.Value}\n";
-        results += $"AI回答: {AIAnswer.Value}\n";
-        results += $"親プレイヤー: {(ParentPlayerIndex < players.Count ? players[ParentPlayerIndex].PlayerName.Value : "不明")}\n\n";
+        Debug.Log("[PhaseCheck] DisplayRoundResults called");
         
-        results += "全プレイヤーの回答:\n";
-        for (int i = 0; i < players.Count; i++)
+        // シンプルな結果表示: AI回答のみ
+        string results = $"AI回答：{AIAnswer.Value}";
+        
+        Debug.Log($"[PhaseCheck] Setting results text: {results}");
+        
+        // Results専用テキストを優先使用
+        if (resultsText != null)
         {
-            string answer = PlayerAnswers[i].Value;
-            if (!string.IsNullOrEmpty(answer))
-            {
-                results += $"{players[i].PlayerName.Value}: {answer}\n";
-            }
+            resultsText.text = results;
+            Debug.Log("[PhaseCheck] Results displayed in resultsText");
         }
-        
-        triviaMessage.text = results;
+        else if (triviaMessage != null)
+        {
+            triviaMessage.text = results;
+            Debug.Log("[PhaseCheck] Results displayed in triviaMessage (fallback)");
+        }
+        else
+        {
+            Debug.LogError("[PhaseCheck] No text component available for results display!");
+        }
     }
 
     private void ShowGameOver()
     {
-        triviaMessage.text = "ゲーム終了！";
+        Debug.Log("[PhaseCheck] ShowGameOver called");
         
+        // 全てのゲームUIを非表示
         if (questionElements != null) questionElements.SetActive(false);
         if (votingUI != null) votingUI.SetActive(false);
+        if (resultsUI != null) resultsUI.SetActive(false);
+        if (aiAnswerInputArea != null) aiAnswerInputArea.SetActive(false);
+        
+        // ゲーム終了メッセージ
+        if (triviaMessage != null) triviaMessage.text = "ゲーム終了！";
         
         // TriviaManagerのendGameObjectシステムを活用
         if (endGameObject != null)
