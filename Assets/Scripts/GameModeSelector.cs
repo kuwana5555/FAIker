@@ -14,6 +14,9 @@ public class GameModeSelector : MonoBehaviour
     [Tooltip("推理ゲームモードのボタン")]
     public Button deductionGameButton;
     
+    [Tooltip("Name Crafterゲームモードのボタン")]
+    public Button nameCrafterGameButton;
+    
     [Tooltip("ゲームモード選択UI")]
     public GameObject gameModeSelectionUI;
     
@@ -23,7 +26,8 @@ public class GameModeSelector : MonoBehaviour
     public enum GameMode
     {
         Trivia,
-        Deduction
+        Deduction,
+        NameCrafter
     }
 
     public static GameMode SelectedGameMode { get; private set; } = GameMode.Trivia;
@@ -31,8 +35,14 @@ public class GameModeSelector : MonoBehaviour
     private void Start()
     {
         // ボタンのイベントを設定
-        triviaGameButton.onClick.AddListener(() => SelectGameMode(GameMode.Trivia));
-        deductionGameButton.onClick.AddListener(() => SelectGameMode(GameMode.Deduction));
+        if (triviaGameButton != null)
+            triviaGameButton.onClick.AddListener(() => SelectGameMode(GameMode.Trivia));
+        
+        if (deductionGameButton != null)
+            deductionGameButton.onClick.AddListener(() => SelectGameMode(GameMode.Deduction));
+        
+        if (nameCrafterGameButton != null)
+            nameCrafterGameButton.onClick.AddListener(() => SelectGameMode(GameMode.NameCrafter));
         
         // 初期選択
         SelectGameMode(GameMode.Trivia);
@@ -50,8 +60,25 @@ public class GameModeSelector : MonoBehaviour
 
     private void UpdateGameModeDisplay()
     {
-        string modeText = SelectedGameMode == GameMode.Trivia ? "トリビアゲーム" : "推理ゲーム";
-        selectedGameModeText.text = $"選択中: {modeText}";
+        string modeText;
+        switch (SelectedGameMode)
+        {
+            case GameMode.Trivia:
+                modeText = "トリビアゲーム";
+                break;
+            case GameMode.Deduction:
+                modeText = "推理ゲーム";
+                break;
+            case GameMode.NameCrafter:
+                modeText = "Name Crafterゲーム";
+                break;
+            default:
+                modeText = "不明なゲーム";
+                break;
+        }
+        
+        if (selectedGameModeText != null)
+            selectedGameModeText.text = $"選択中: {modeText}";
         
         // ボタンの見た目を更新
         UpdateButtonAppearance();
@@ -60,22 +87,26 @@ public class GameModeSelector : MonoBehaviour
     private void UpdateButtonAppearance()
     {
         // 選択されているボタンをハイライト
-        ColorBlock triviaColors = triviaGameButton.colors;
-        ColorBlock deductionColors = deductionGameButton.colors;
-        
-        if (SelectedGameMode == GameMode.Trivia)
+        if (triviaGameButton != null)
         {
-            triviaColors.normalColor = Color.green;
-            deductionColors.normalColor = Color.white;
-        }
-        else
-        {
-            triviaColors.normalColor = Color.white;
-            deductionColors.normalColor = Color.green;
+            ColorBlock triviaColors = triviaGameButton.colors;
+            triviaColors.normalColor = (SelectedGameMode == GameMode.Trivia) ? Color.green : Color.white;
+            triviaGameButton.colors = triviaColors;
         }
         
-        triviaGameButton.colors = triviaColors;
-        deductionGameButton.colors = deductionColors;
+        if (deductionGameButton != null)
+        {
+            ColorBlock deductionColors = deductionGameButton.colors;
+            deductionColors.normalColor = (SelectedGameMode == GameMode.Deduction) ? Color.green : Color.white;
+            deductionGameButton.colors = deductionColors;
+        }
+        
+        if (nameCrafterGameButton != null)
+        {
+            ColorBlock nameCrafterColors = nameCrafterGameButton.colors;
+            nameCrafterColors.normalColor = (SelectedGameMode == GameMode.NameCrafter) ? Color.green : Color.white;
+            nameCrafterGameButton.colors = nameCrafterColors;
+        }
     }
 
     public void ShowGameModeSelection()
