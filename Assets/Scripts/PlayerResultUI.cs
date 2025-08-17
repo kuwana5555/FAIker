@@ -212,3 +212,4 @@ public class PlayerResultUI : MonoBehaviour
         transform.localScale = Vector3.one;
     }
 }
+

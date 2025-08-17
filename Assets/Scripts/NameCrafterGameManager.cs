@@ -636,7 +636,6 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
     public void SubmitVotingResults(int voterIndex, Dictionary<int, int> allocations)
     {
         if (GameState != NameCrafterGameState.Voting) return;
-        if (!HasInputAuthority) return;
         
         // 配分データをネットワーク配列に変換してRPC送信
         var players = TriviaPlayer.TriviaPlayerRefs;
@@ -704,27 +703,59 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
 
     public void SubmitAnswer()
     {
-        if (GameState != NameCrafterGameState.AnswerCreation) return;
-        if (answerInputField == null) return;
+        Debug.Log("[NameCrafter] SubmitAnswer called");
+        
+        if (GameState != NameCrafterGameState.AnswerCreation)
+        {
+            Debug.LogWarning($"[NameCrafter] Wrong game state for answer submission: {GameState}");
+            return;
+        }
+        
+        if (answerInputField == null)
+        {
+            Debug.LogError("[NameCrafter] Answer input field is null!");
+            return;
+        }
         
         string answer = answerInputField.text.Trim();
-        if (string.IsNullOrEmpty(answer)) return;
+        Debug.Log($"[NameCrafter] Answer text: '{answer}'");
+        
+        if (string.IsNullOrEmpty(answer))
+        {
+            Debug.LogWarning("[NameCrafter] Answer is empty or null");
+            return;
+        }
         
         var localPlayer = TriviaPlayer.LocalPlayer;
-        if (localPlayer != null)
+        if (localPlayer == null)
         {
-            int playerIndex = TriviaPlayer.TriviaPlayerRefs.IndexOf(localPlayer);
-            if (playerIndex >= 0 && HasInputAuthority)
-            {
-                RPC_SubmitAnswer(playerIndex, answer);
-                
-                if (_confirmSFX != null) _confirmSFX.Play();
-                
-                // UI更新
-                answerInputField.text = "";
-                answerInputField.gameObject.SetActive(false);
-                submitAnswerButton.gameObject.SetActive(false);
-            }
+            Debug.LogError("[NameCrafter] Local player is null!");
+            return;
+        }
+        
+        Debug.Log($"[NameCrafter] Local player: {localPlayer.PlayerName.Value}");
+        
+        int playerIndex = TriviaPlayer.TriviaPlayerRefs.IndexOf(localPlayer);
+        Debug.Log($"[NameCrafter] Player index: {playerIndex}");
+        Debug.Log($"[NameCrafter] Has input authority: {HasInputAuthority}");
+        
+        if (playerIndex >= 0)
+        {
+            Debug.Log($"[NameCrafter] Sending RPC with answer: '{answer}' for player {playerIndex}");
+            RPC_SubmitAnswer(playerIndex, answer);
+            
+            if (_confirmSFX != null) _confirmSFX.Play();
+            
+            // UI更新
+            answerInputField.text = "";
+            answerInputField.gameObject.SetActive(false);
+            submitAnswerButton.gameObject.SetActive(false);
+            
+            Debug.Log("[NameCrafter] Answer submitted successfully, UI updated");
+        }
+        else
+        {
+            Debug.LogError($"[NameCrafter] Cannot submit answer - Invalid PlayerIndex: {playerIndex}");
         }
     }
 
@@ -748,7 +779,7 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
         if (localPlayer != null)
         {
             int playerIndex = TriviaPlayer.TriviaPlayerRefs.IndexOf(localPlayer);
-            if (playerIndex >= 0 && HasInputAuthority)
+            if (playerIndex >= 0)
             {
                 RPC_SelectOption(playerIndex, optionIndex);
                 
@@ -785,7 +816,7 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
         if (localPlayer != null)
         {
             int playerIndex = TriviaPlayer.TriviaPlayerRefs.IndexOf(localPlayer);
-            if (playerIndex >= 0 && HasInputAuthority)
+            if (playerIndex >= 0)
             {
                 RPC_CompleteVoting(playerIndex);
                 
@@ -1152,6 +1183,8 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
 
     private void UpdateWordSelectionUI()
     {
+        Debug.Log("[NameCrafter] UpdateWordSelectionUI called");
+        
         var localPlayer = TriviaPlayer.LocalPlayer;
         bool canSelect = false;
         
@@ -1160,6 +1193,9 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
             int playerIndex = TriviaPlayer.TriviaPlayerRefs.IndexOf(localPlayer);
             int currentChooser = WordChooserPlayers[CurrentWordChooserIndex];
             canSelect = (playerIndex == currentChooser);
+            
+            Debug.Log($"[NameCrafter] Player {playerIndex} ({localPlayer.PlayerName.Value}) can select: {canSelect}");
+            Debug.Log($"[NameCrafter] Current chooser: {currentChooser} ({TriviaPlayer.TriviaPlayerRefs[currentChooser].PlayerName.Value})");
         }
         
         // 単語選択ボタンの更新
@@ -1167,7 +1203,21 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
         {
             if (wordOptionButtons[i] != null)
             {
-                wordOptionButtons[i].interactable = canSelect && !string.IsNullOrEmpty(WordOptions[i].Value);
+                bool buttonInteractable = canSelect && !string.IsNullOrEmpty(WordOptions[i].Value);
+                wordOptionButtons[i].interactable = buttonInteractable;
+                
+                Debug.Log($"[NameCrafter] Button {i}: interactable={buttonInteractable}, word='{WordOptions[i].Value}'");
+                
+                // ボタンの状態を詳細に記録
+                if (buttonInteractable)
+                {
+                    Debug.Log($"[NameCrafter] ✅ Button {i} is INTERACTABLE for {TriviaPlayer.LocalPlayer?.PlayerName.Value}");
+                }
+                else
+                {
+                    string reason = canSelect ? "no word available" : "not current chooser";
+                    Debug.Log($"[NameCrafter] ❌ Button {i} is NOT interactable for {TriviaPlayer.LocalPlayer?.PlayerName.Value} (reason: {reason})");
+                }
             }
             
             if (wordOptionTexts[i] != null)
@@ -1187,8 +1237,12 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
                 string chooserName = players[currentChooser].PlayerName.Value;
                 string partOfSpeech = GetPartOfSpeechForChooser(CurrentWordChooserIndex);
                 currentChooserText.text = $"{chooserName}が{partOfSpeech}を選択中";
+                
+                Debug.Log($"[NameCrafter] Updated chooser text: {chooserName}が{partOfSpeech}を選択中");
             }
         }
+        
+        Debug.Log($"[NameCrafter] UpdateWordSelectionUI completed - Can select: {canSelect}");
     }
 
     private void UpdateSelectedWordsDisplay()
@@ -1413,6 +1467,14 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
     private void UpdateCurrentWordChooser()
     {
         Debug.Log($"[NameCrafter] Current word chooser updated: {CurrentWordChooserIndex}");
+        
+        // 単語選択フェーズ中の場合、UIを更新
+        if (GameState == NameCrafterGameState.WordSelection)
+        {
+            Debug.Log("[NameCrafter] Updating word selection UI due to chooser change");
+            UpdateWordSelectionUI();
+            UpdateSelectedWordsDisplay();
+        }
     }
 
     #endregion
