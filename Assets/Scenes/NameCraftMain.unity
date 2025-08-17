@@ -178,8 +178,8 @@ MonoBehaviour:
       m_Calls: []
   m_text: Name Crafter
   m_isRightToLeft: 0
-  m_fontAsset: {fileID: 11400000, guid: ffcfb3bf3eb9783409a17802b3d9ea16, type: 2}
-  m_sharedMaterial: {fileID: 2100000, guid: d9611a849b0c0544cba00f76144483fe, type: 2}
+  m_fontAsset: {fileID: 11400000, guid: 3caf2e99dcc14d34a98965c15e2da9d9, type: 2}
+  m_sharedMaterial: {fileID: -1947299709437258609, guid: 3caf2e99dcc14d34a98965c15e2da9d9, type: 2}
   m_fontSharedMaterials: []
   m_fontMaterial: {fileID: 0}
   m_fontMaterials: []
@@ -4085,7 +4085,7 @@ MonoBehaviour:
   roomName: {fileID: 710416401}
   triviaGamePrefab: {fileID: 4836408925152458624, guid: 5776bde4eef1cb54ea41f4fa59047298, type: 3}
   deductionGamePrefab: {fileID: 4836408925152458624, guid: b0d2bed3357ed3b4e864ae02412ce043, type: 3}
-  nameCrafterGamePrefab: {fileID: 4836408925152458624, guid: 6e6efdac2768b8b4dbe972057a1d411e, type: 3}
+  nameCrafterGamePrefab: {fileID: 6529174800521825618, guid: e5ff134b8477b8d428a8de223af499d6, type: 3}
   playerContainer: {fileID: 945094767}
   preGameMessage: {fileID: 765822995}
   gameModeSelectionUI: {fileID: 0}
