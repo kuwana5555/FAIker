@@ -391,17 +391,8 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
                     break;
                     
                 case NameCrafterGameState.WordSelection:
-                    // 次の単語選択者へ、または回答フェーズへ
-                    if (CurrentWordChooserIndex < 2)
-                    {
-                        CurrentWordChooserIndex++;
-                        PrepareWordOptions();
-                        timer = TickTimer.CreateFromSeconds(Runner, wordSelectionTime);
-                    }
-                    else
-                    {
-                        StartAnswerPhase();
-                    }
+                    // 時間切れの場合はランダム選択してから次の処理へ
+                    HandleWordSelectionTimeout();
                     break;
                     
                 case NameCrafterGameState.AnswerCreation:
@@ -410,31 +401,27 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
                     break;
                     
                 case NameCrafterGameState.Selection:
-                    // 選択モード：結果表示へ
+                    // 選択モード：結果計算後、最終ラウンドかチェック
                     CalculateSelectionResults();
-                    GameState = NameCrafterGameState.Results;
-                    timerLength = resultsTime;
-                    timer = TickTimer.CreateFromSeconds(Runner, timerLength);
+                    HandleResultsTransition();
                     break;
                     
                 case NameCrafterGameState.Voting:
-                    // 投票フェーズ終了：結果計算
+                    // 投票フェーズ終了：結果計算後、最終ラウンドかチェック
                     CalculateVotingResults();
-                    GameState = NameCrafterGameState.Results;
-                    timerLength = resultsTime;
-                    timer = TickTimer.CreateFromSeconds(Runner, timerLength);
+                    HandleResultsTransition();
                     break;
                     
                 case NameCrafterGameState.Results:
-                    // 次のラウンドまたはゲーム終了
+                    // 次のラウンドまたはゲーム終了（最終ラウンドの場合のみここに到達）
                     if (CurrentRound >= maxRounds)
                     {
                         GameState = NameCrafterGameState.GameOver;
                     }
                     else
                     {
-                        // 途中ラウンド終了後は結果表示をスキップして次のラウンドへ
-                        Debug.Log($"[NameCrafter] Round {CurrentRound} completed, skipping results display");
+                        // この分岐は通常発生しないはずだが、念のため
+                        Debug.LogWarning($"[NameCrafter] Unexpected Results state for non-final round {CurrentRound}");
                         StartNewRound();
                     }
                     break;
@@ -574,6 +561,91 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
         GameState = NameCrafterGameState.Voting;
         timerLength = votingTime;
         timer = TickTimer.CreateFromSeconds(Runner, timerLength);
+    }
+
+    /// <summary>
+    /// 単語選択フェーズのタイムアウト処理（ランダム選択を含む）
+    /// </summary>
+    private void HandleWordSelectionTimeout()
+    {
+        if (!HasStateAuthority) return;
+        
+        // 現在の選択者が単語を選択していない場合、ランダムに選択
+        if (string.IsNullOrEmpty(SelectedWords[CurrentWordChooserIndex].Value))
+        {
+            AutoSelectRandomWord();
+        }
+        
+        // 次の選択者へ、または回答フェーズへ
+        if (CurrentWordChooserIndex < 2)
+        {
+            CurrentWordChooserIndex++;
+            PrepareWordOptions();
+            timer = TickTimer.CreateFromSeconds(Runner, wordSelectionTime);
+        }
+        else
+        {
+            StartAnswerPhase();
+        }
+    }
+    
+    /// <summary>
+    /// 現在の選択者用にランダムに単語を自動選択
+    /// </summary>
+    private void AutoSelectRandomWord()
+    {
+        if (!HasStateAuthority) return;
+        if (nameCrafterTopics == null) return;
+        
+        // 利用可能な単語選択肢を取得
+        var availableWords = new List<string>();
+        for (int i = 0; i < WordOptions.Length; i++)
+        {
+            if (!string.IsNullOrEmpty(WordOptions[i].Value))
+            {
+                availableWords.Add(WordOptions[i].Value);
+            }
+        }
+        
+        if (availableWords.Count == 0)
+        {
+            Debug.LogWarning($"[NameCrafter] No available words to auto-select for chooser {CurrentWordChooserIndex}");
+            return;
+        }
+        
+        // ランダムに選択
+        string randomWord = availableWords[Random.Range(0, availableWords.Count)];
+        SelectedWords.Set(CurrentWordChooserIndex, randomWord);
+        
+        var players = TriviaPlayer.TriviaPlayerRefs;
+        int chooserPlayerIndex = WordChooserPlayers[CurrentWordChooserIndex];
+        string chooserName = chooserPlayerIndex < players.Count ? players[chooserPlayerIndex].PlayerName.Value : "Unknown";
+        string partOfSpeech = GetPartOfSpeechForChooser(CurrentWordChooserIndex);
+        
+        Debug.Log($"[NameCrafter] Auto-selected '{randomWord}' ({partOfSpeech}) for {chooserName} (timeout)");
+    }
+
+    /// <summary>
+    /// 結果フェーズへの遷移処理（途中ラウンドは時間待機をスキップ）
+    /// </summary>
+    private void HandleResultsTransition()
+    {
+        if (!HasStateAuthority) return;
+        
+        if (CurrentRound >= maxRounds)
+        {
+            // 最終ラウンド：結果表示フェーズに移行（時間待機あり）
+            Debug.Log($"[NameCrafter] Final round {CurrentRound} completed, showing results");
+            GameState = NameCrafterGameState.Results;
+            timerLength = resultsTime;
+            timer = TickTimer.CreateFromSeconds(Runner, timerLength);
+        }
+        else
+        {
+            // 途中ラウンド：結果表示をスキップして次のラウンドへ直行
+            Debug.Log($"[NameCrafter] Intermediate round {CurrentRound} completed, skipping results and starting next round");
+            StartNewRound();
+        }
     }
 
     private void ClearPlayerData()
