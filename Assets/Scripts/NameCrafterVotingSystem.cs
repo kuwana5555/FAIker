@@ -86,6 +86,9 @@ public class NameCrafterVotingSystem : MonoBehaviour
         
         Debug.Log($"[VotingSystem] Initialized with {totalPoints} total points");
         
+        // 投票完了ボタンのクリックイベント設定
+        SetupCompleteButton();
+        
         // UI更新
         UpdatePointsDisplay();
         
@@ -122,6 +125,11 @@ public class NameCrafterVotingSystem : MonoBehaviour
             
             votingTargetPlayers.Add((playerIndex, answer, players[playerIndex].PlayerName.Value));
         }
+        
+        // 🎲 投票対象をランダムにシャッフル（公平性のため）
+        ShuffleVotingTargets(votingTargetPlayers);
+        
+        Debug.Log("[VotingSystem] Voting targets shuffled for fairness");
         
         // プレイヤー数に応じた配置場所を取得
         Transform[] positions = GetVotingPositions(players.Count);
@@ -163,13 +171,24 @@ public class NameCrafterVotingSystem : MonoBehaviour
     /// </summary>
     private void CreateVotingTarget(int playerIndex, string answer, string playerName, Transform position)
     {
-        if (votingTargetPrefab == null || position == null) return;
+        if (votingTargetPrefab == null)
+        {
+            Debug.LogError("[VotingSystem] Voting target prefab is null! Cannot create voting targets.");
+            return;
+        }
+        
+        if (position == null)
+        {
+            Debug.LogError($"[VotingSystem] Position is null for player {playerIndex}! Cannot create voting target.");
+            return;
+        }
         
         GameObject targetObj = Instantiate(votingTargetPrefab, position);
         VotingTargetUI targetUI = targetObj.GetComponent<VotingTargetUI>();
         
         if (targetUI == null)
         {
+            Debug.LogWarning($"[VotingSystem] VotingTargetUI component not found on prefab for player {playerIndex}. Adding component.");
             targetUI = targetObj.AddComponent<VotingTargetUI>();
         }
         
@@ -180,6 +199,37 @@ public class NameCrafterVotingSystem : MonoBehaviour
         playerAllocations[playerIndex] = 0;
         
         Debug.Log($"[VotingSystem] Created voting target for player {playerIndex} ({playerName}) at position {position.name}");
+    }
+
+    /// <summary>
+    /// 投票対象リストをランダムにシャッフル（Fisher-Yates アルゴリズム）
+    /// </summary>
+    /// <param name="list">シャッフルする投票対象リスト</param>
+    private void ShuffleVotingTargets(List<(int playerIndex, string answer, string playerName)> list)
+    {
+        Debug.Log($"[VotingSystem] Shuffling {list.Count} voting targets...");
+        
+        // シャッフル前の順序をログ出力
+        for (int i = 0; i < list.Count; i++)
+        {
+            Debug.Log($"[VotingSystem] Before shuffle [{i}]: Player {list[i].playerIndex} - '{list[i].answer}'");
+        }
+        
+        // Fisher-Yates シャッフル
+        for (int i = list.Count - 1; i > 0; i--)
+        {
+            int randomIndex = Random.Range(0, i + 1);
+            var temp = list[i];
+            list[i] = list[randomIndex];
+            list[randomIndex] = temp;
+        }
+        
+        // シャッフル後の順序をログ出力
+        Debug.Log("[VotingSystem] After shuffle:");
+        for (int i = 0; i < list.Count; i++)
+        {
+            Debug.Log($"[VotingSystem] After shuffle [{i}]: Player {list[i].playerIndex} - '{list[i].answer}'");
+        }
     }
 
     /// <summary>
@@ -229,12 +279,26 @@ public class NameCrafterVotingSystem : MonoBehaviour
     /// <returns>実際に変更された量</returns>
     public int AllocatePoints(int playerIndex, int change)
     {
-        if (votingCompleted) return 0;
-        if (!playerAllocations.ContainsKey(playerIndex)) return 0;
+        Debug.Log($"[VotingSystem] AllocatePoints called: player {playerIndex}, change {change}");
+        Debug.Log($"[VotingSystem] Current state - votingCompleted: {votingCompleted}, remainingPoints: {remainingPoints}");
+        
+        if (votingCompleted)
+        {
+            Debug.LogWarning("[VotingSystem] Voting already completed, cannot allocate points");
+            return 0;
+        }
+        
+        if (!playerAllocations.ContainsKey(playerIndex))
+        {
+            Debug.LogError($"[VotingSystem] Player {playerIndex} not found in allocations dictionary");
+            return 0;
+        }
         
         int currentAllocation = playerAllocations[playerIndex];
         int newAllocation = Mathf.Clamp(currentAllocation + change, 0, totalPoints);
         int actualChange = newAllocation - currentAllocation;
+        
+        Debug.Log($"[VotingSystem] Current allocation: {currentAllocation}, proposed: {newAllocation}, actual change: {actualChange}");
         
         // 残り持ち点をチェック
         if (remainingPoints - actualChange < 0)
@@ -242,6 +306,7 @@ public class NameCrafterVotingSystem : MonoBehaviour
             // 残り持ち点を超える配分は不可
             actualChange = remainingPoints;
             newAllocation = currentAllocation + actualChange;
+            Debug.Log($"[VotingSystem] Adjusted for remaining points - new allocation: {newAllocation}, actual change: {actualChange}");
         }
         
         if (actualChange != 0)
@@ -249,12 +314,17 @@ public class NameCrafterVotingSystem : MonoBehaviour
             playerAllocations[playerIndex] = newAllocation;
             remainingPoints -= actualChange;
             
+            Debug.Log($"[VotingSystem] ✅ Points allocated successfully! Player {playerIndex}: {currentAllocation} → {newAllocation}");
+            Debug.Log($"[VotingSystem] Remaining points: {remainingPoints + actualChange} → {remainingPoints}");
+            
             // UI更新
             UpdatePointsDisplay();
             UpdateVotingTargets();
             UpdateCompleteButton();
-            
-            Debug.Log($"[VotingSystem] Player {playerIndex} allocation changed by {actualChange} to {newAllocation}");
+        }
+        else
+        {
+            Debug.Log($"[VotingSystem] No change made for player {playerIndex}");
         }
         
         return actualChange;
@@ -350,7 +420,7 @@ public class NameCrafterVotingSystem : MonoBehaviour
             if (localPlayer != null)
             {
                 int localPlayerIndex = TriviaPlayer.TriviaPlayerRefs.IndexOf(localPlayer);
-                gameManager.SubmitVotingResults(localPlayerIndex, playerAllocations);
+                gameManager.OnVotingCompleted(localPlayerIndex, playerAllocations);
             }
         }
         
@@ -395,6 +465,27 @@ public class NameCrafterVotingSystem : MonoBehaviour
             {
                 target.UpdateDisplay();
             }
+        }
+    }
+
+    /// <summary>
+    /// 投票完了ボタンのクリックイベントを設定
+    /// </summary>
+    private void SetupCompleteButton()
+    {
+        if (completeVotingButton != null)
+        {
+            // 既存のリスナーをクリア
+            completeVotingButton.onClick.RemoveAllListeners();
+            
+            // 新しいリスナーを追加
+            completeVotingButton.onClick.AddListener(CompleteVoting);
+            
+            Debug.Log("[VotingSystem] Complete button click event setup");
+        }
+        else
+        {
+            Debug.LogWarning("[VotingSystem] Complete voting button is null - cannot setup click event");
         }
     }
 
@@ -475,157 +566,4 @@ public class NameCrafterVotingSystem : MonoBehaviour
     }
 }
 
-/// <summary>
-/// 個別投票対象のUI管理クラス
-/// </summary>
-public class VotingTargetUI : MonoBehaviour
-{
-    [Header("UI Elements")]
-    public TextMeshProUGUI playerNameText;
-    public TextMeshProUGUI answerText;
-    public TextMeshProUGUI currentPointsText;
-    public TMP_InputField pointsInputField;
-    public Button increaseSmallButton;
-    public Button increaseLargeButton;
-    public Button decreaseSmallButton;
-    public Button decreaseLargeButton;
-    public Button setZeroButton;
-    public Button setMaxButton;
 
-    private int targetPlayerIndex;
-    private NameCrafterVotingSystem votingSystem;
-
-    /// <summary>
-    /// 投票対象UIの初期化
-    /// </summary>
-    public void Initialize(int playerIndex, string playerName, string answer, NameCrafterVotingSystem system)
-    {
-        targetPlayerIndex = playerIndex;
-        votingSystem = system;
-
-        // プレイヤー情報表示
-        if (playerNameText != null)
-            playerNameText.text = playerName;
-
-        if (answerText != null)
-            answerText.text = answer;
-
-        // ボタンイベント設定
-        SetupButtons();
-
-        // 入力フィールド設定
-        if (pointsInputField != null)
-        {
-            pointsInputField.onEndEdit.AddListener(OnPointsInputChanged);
-        }
-
-        UpdateDisplay();
-    }
-
-    /// <summary>
-    /// ボタンイベントの設定
-    /// </summary>
-    private void SetupButtons()
-    {
-        if (increaseSmallButton != null)
-            increaseSmallButton.onClick.AddListener(() => ChangePoints(10));
-
-        if (increaseLargeButton != null)
-            increaseLargeButton.onClick.AddListener(() => ChangePoints(50));
-
-        if (decreaseSmallButton != null)
-            decreaseSmallButton.onClick.AddListener(() => ChangePoints(-10));
-
-        if (decreaseLargeButton != null)
-            decreaseLargeButton.onClick.AddListener(() => ChangePoints(-50));
-
-        if (setZeroButton != null)
-            setZeroButton.onClick.AddListener(() => SetPoints(0));
-
-        if (setMaxButton != null)
-            setMaxButton.onClick.AddListener(() => SetMaxPoints());
-    }
-
-    /// <summary>
-    /// 配分点数の変更
-    /// </summary>
-    private void ChangePoints(int change)
-    {
-        if (votingSystem != null)
-        {
-            votingSystem.AllocatePoints(targetPlayerIndex, change);
-        }
-    }
-
-    /// <summary>
-    /// 配分点数の直接設定
-    /// </summary>
-    private void SetPoints(int points)
-    {
-        if (votingSystem != null)
-        {
-            votingSystem.SetAllocation(targetPlayerIndex, points);
-        }
-    }
-
-    /// <summary>
-    /// 最大配分（残り持ち点全て）
-    /// </summary>
-    private void SetMaxPoints()
-    {
-        if (votingSystem != null)
-        {
-            int currentAllocation = votingSystem.GetPlayerAllocation(targetPlayerIndex);
-            int remainingPoints = votingSystem.GetRemainingPoints();
-            int maxPossible = currentAllocation + remainingPoints;
-            
-            votingSystem.SetAllocation(targetPlayerIndex, maxPossible);
-        }
-    }
-
-    /// <summary>
-    /// 入力フィールドからの点数変更
-    /// </summary>
-    private void OnPointsInputChanged(string input)
-    {
-        if (int.TryParse(input, out int targetPoints))
-        {
-            SetPoints(targetPoints);
-        }
-        else
-        {
-            // 無効な入力の場合は現在値に戻す
-            UpdateDisplay();
-        }
-    }
-
-    /// <summary>
-    /// 表示の更新
-    /// </summary>
-    public void UpdateDisplay()
-    {
-        if (votingSystem == null) return;
-
-        int currentPoints = votingSystem.GetPlayerAllocation(targetPlayerIndex);
-
-        if (currentPointsText != null)
-            currentPointsText.text = currentPoints.ToString();
-
-        if (pointsInputField != null)
-            pointsInputField.text = currentPoints.ToString();
-    }
-
-    /// <summary>
-    /// UI要素の有効/無効切り替え
-    /// </summary>
-    public void SetInteractable(bool interactable)
-    {
-        if (increaseSmallButton != null) increaseSmallButton.interactable = interactable;
-        if (increaseLargeButton != null) increaseLargeButton.interactable = interactable;
-        if (decreaseSmallButton != null) decreaseSmallButton.interactable = interactable;
-        if (decreaseLargeButton != null) decreaseLargeButton.interactable = interactable;
-        if (setZeroButton != null) setZeroButton.interactable = interactable;
-        if (setMaxButton != null) setMaxButton.interactable = interactable;
-        if (pointsInputField != null) pointsInputField.interactable = interactable;
-    }
-}

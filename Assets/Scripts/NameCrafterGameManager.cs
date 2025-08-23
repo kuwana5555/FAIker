@@ -77,6 +77,13 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
     [Networked, Capacity(20)]
     public NetworkArray<float> PlayerVoteRates => default;
 
+    // プレイヤー統計データ（最終結果表示用）
+    [Networked, Capacity(20)]
+    public NetworkArray<int> PlayerMaxRoundScores => default;
+
+    [Networked, Capacity(20)]
+    public NetworkArray<int> PlayerBestRounds => default;
+
     #endregion
 
     #region UI Elements - 基本構造はDeductionGameManagerと同じ
@@ -426,6 +433,8 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
                     }
                     else
                     {
+                        // 途中ラウンド終了後は結果表示をスキップして次のラウンドへ
+                        Debug.Log($"[NameCrafter] Round {CurrentRound} completed, skipping results display");
                         StartNewRound();
                     }
                     break;
@@ -628,29 +637,7 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
         RPC_SelectGameMode(mode);
     }
 
-    /// <summary>
-    /// 投票システムから投票結果を受信
-    /// </summary>
-    /// <param name="voterIndex">投票者のインデックス</param>
-    /// <param name="allocations">各プレイヤーへの配分</param>
-    public void SubmitVotingResults(int voterIndex, Dictionary<int, int> allocations)
-    {
-        if (GameState != NameCrafterGameState.Voting) return;
-        
-        // 配分データをネットワーク配列に変換してRPC送信
-        var players = TriviaPlayer.TriviaPlayerRefs;
-        var allocationArray = new int[players.Count];
-        
-        foreach (var kvp in allocations)
-        {
-            if (kvp.Key >= 0 && kvp.Key < allocationArray.Length)
-            {
-                allocationArray[kvp.Key] = kvp.Value;
-            }
-        }
-        
-        RPC_SubmitVotingResults(voterIndex, allocationArray);
-    }
+
 
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     public void RPC_SelectGameMode(NameCrafterGameMode mode)
@@ -804,28 +791,33 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
         }
     }
 
-    public void CompleteVoting()
+    /// <summary>
+    /// 投票システムから呼ばれる投票完了処理
+    /// </summary>
+    /// <param name="voterIndex">投票完了したプレイヤーのインデックス</param>
+    /// <param name="allocations">投票配分データ</param>
+    public void OnVotingCompleted(int voterIndex, Dictionary<int, int> allocations)
     {
         if (GameState != NameCrafterGameState.Voting) return;
         
-        // 投票システムから完了状態をチェック
-        var votingSystem = GetComponent<NameCrafterVotingSystem>();
-        if (votingSystem != null && votingSystem.GetRemainingPoints() > 0) return; // まだ配分が完了していない
+        Debug.Log($"[NameCrafter] Voting completed by player {voterIndex}");
         
-        var localPlayer = TriviaPlayer.LocalPlayer;
-        if (localPlayer != null)
+        // 配分データをネットワーク配列に変換してRPC送信
+        var players = TriviaPlayer.TriviaPlayerRefs;
+        var allocationArray = new int[players.Count];
+        
+        foreach (var kvp in allocations)
         {
-            int playerIndex = TriviaPlayer.TriviaPlayerRefs.IndexOf(localPlayer);
-            if (playerIndex >= 0)
+            if (kvp.Key >= 0 && kvp.Key < allocationArray.Length)
             {
-                RPC_CompleteVoting(playerIndex);
-                
-                if (_confirmSFX != null) _confirmSFX.Play();
-                
-                // 投票完了処理（投票システムが管理）
-                Debug.Log("[NameCrafter] Voting completed by local player");
+                allocationArray[kvp.Key] = kvp.Value;
             }
         }
+        
+        RPC_SubmitVotingResults(voterIndex, allocationArray);
+        RPC_CompleteVoting(voterIndex);
+        
+        if (_confirmSFX != null) _confirmSFX.Play();
     }
 
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
@@ -901,6 +893,9 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
             int currentTotal = PlayerTotalScores[i];
             PlayerTotalScores.Set(i, currentTotal + playerResult.roundScore);
             
+            // 最高スコアとベストラウンドを更新
+            UpdatePlayerBestScore(i, playerResult.roundScore, CurrentRound);
+            
             Debug.Log($"[NameCrafter] Player {i} ({playerResult.playerName}) scored {playerResult.roundScore} points this round");
         }
     }
@@ -939,6 +934,27 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
             PlayerRoundScores.Set(i, playerResult.roundScore);
             
             Debug.Log($"[NameCrafter] Player {i} ({playerResult.playerName}) match rate: {playerResult.matchRate:F1}%");
+        }
+    }
+
+    /// <summary>
+    /// プレイヤーの最高スコアとベストラウンドを更新
+    /// </summary>
+    /// <param name="playerIndex">プレイヤーインデックス</param>
+    /// <param name="roundScore">今回のラウンドスコア</param>
+    /// <param name="currentRound">現在のラウンド番号</param>
+    private void UpdatePlayerBestScore(int playerIndex, int roundScore, int currentRound)
+    {
+        if (playerIndex < 0 || playerIndex >= PlayerMaxRoundScores.Length) return;
+        
+        int currentMaxScore = PlayerMaxRoundScores[playerIndex];
+        
+        if (roundScore > currentMaxScore)
+        {
+            PlayerMaxRoundScores.Set(playerIndex, roundScore);
+            PlayerBestRounds.Set(playerIndex, currentRound);
+            
+            Debug.Log($"[NameCrafter] Player {playerIndex} new best score: {roundScore} points in round {currentRound}");
         }
     }
 
@@ -1143,10 +1159,18 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
 
     private void ShowResults()
     {
+        // 途中ラウンドの場合は結果表示をスキップ
+        if (CurrentRound < maxRounds)
+        {
+            Debug.Log($"[NameCrafter] Skipping results display for round {CurrentRound} (intermediate round)");
+            return;
+        }
+        
+        Debug.Log($"[NameCrafter] Showing final results after all {maxRounds} rounds");
         HideAllGameUI();
         if (resultsUI != null) resultsUI.SetActive(true);
         
-        DisplayResults();
+        DisplayFinalResults();
     }
 
     private void ShowGameOver()
@@ -1285,12 +1309,14 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
 
     private void SetupVotingUI()
     {
+        Debug.Log("[NameCrafter] Setting up voting UI...");
+        
         // 投票システムコンポーネントを取得または作成
         var votingSystem = GetComponent<NameCrafterVotingSystem>();
         if (votingSystem == null)
         {
-            Debug.LogWarning("[NameCrafter] NameCrafterVotingSystem component not found");
-            return;
+            Debug.LogWarning("[NameCrafter] NameCrafterVotingSystem component not found on GameManager! Adding component...");
+            votingSystem = gameObject.AddComponent<NameCrafterVotingSystem>();
         }
         
         // 投票対象データを準備
@@ -1298,15 +1324,31 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
         var localPlayer = TriviaPlayer.LocalPlayer;
         int localPlayerIndex = localPlayer != null ? players.IndexOf(localPlayer) : -1;
         
+        Debug.Log($"[NameCrafter] Total players: {players.Count}, Local player index: {localPlayerIndex}");
+        
         var playerAnswers = new Dictionary<int, string>();
         
         for (int i = 0; i < players.Count; i++)
         {
-            if (i == localPlayerIndex) continue; // 自分は除外
-            if (string.IsNullOrEmpty(PlayerAnswers[i].Value)) continue; // 未回答は除外
+            if (i == localPlayerIndex) 
+            {
+                Debug.Log($"[NameCrafter] Skipping local player {i} ({players[i].PlayerName.Value})");
+                continue; // 自分は除外
+            }
             
-            playerAnswers[i] = PlayerAnswers[i].Value;
+            string answer = i < PlayerAnswers.Length ? PlayerAnswers[i].Value : "";
+            
+            if (string.IsNullOrEmpty(answer))
+            {
+                Debug.Log($"[NameCrafter] Skipping player {i} ({players[i].PlayerName.Value}) - no answer");
+                continue; // 未回答は除外
+            }
+            
+            playerAnswers[i] = answer;
+            Debug.Log($"[NameCrafter] Added voting target: Player {i} ({players[i].PlayerName.Value}) - '{answer}'");
         }
+        
+        Debug.Log($"[NameCrafter] Prepared {playerAnswers.Count} voting targets");
         
         // 投票システムを初期化
         votingSystem.InitializeVoting(this, playerAnswers);
@@ -1315,7 +1357,7 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
     }
 
     /// <summary>
-    /// 投票フェーズでの完了ボタン処理
+    /// 投票フェーズでの完了ボタン処理（旧バージョン - 現在は使用されていません）
     /// </summary>
     public void OnVotingCompleted()
     {
@@ -1325,6 +1367,81 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
         // 必要に応じて追加の処理を実装
     }
 
+    /// <summary>
+    /// 最終結果表示（全ラウンド終了後）
+    /// </summary>
+    private void DisplayFinalResults()
+    {
+        if (resultsText == null) return;
+        
+        string results = GenerateFinalResultsText();
+        resultsText.text = results;
+    }
+    
+    /// <summary>
+    /// 最終結果テキストの生成
+    /// </summary>
+    /// <returns>最終結果テキスト</returns>
+    private string GenerateFinalResultsText()
+    {
+        var players = TriviaPlayer.TriviaPlayerRefs;
+        var results = new System.Text.StringBuilder();
+        
+        results.AppendLine("🏆 最終結果 🏆");
+        results.AppendLine($"全{maxRounds}ラウンド終了");
+        results.AppendLine();
+        
+        // プレイヤー統計データを作成
+        var playerStats = new List<(int index, string name, int totalScore, int maxRoundScore, int bestRound)>();
+        
+        for (int i = 0; i < players.Count; i++)
+        {
+            playerStats.Add((
+                i,
+                players[i].PlayerName.Value,
+                PlayerTotalScores[i],
+                PlayerMaxRoundScores[i],
+                PlayerBestRounds[i]
+            ));
+        }
+        
+        // 総スコア順でソート
+        playerStats.Sort((a, b) => b.totalScore.CompareTo(a.totalScore));
+        
+        // 順位表示
+        for (int rank = 0; rank < playerStats.Count; rank++)
+        {
+            var (index, name, totalScore, maxRoundScore, bestRound) = playerStats[rank];
+            
+            string rankIcon = GetRankIcon(rank + 1);
+            results.AppendLine($"{rankIcon} {rank + 1}位: {name}");
+            results.AppendLine($"   総スコア: {totalScore}点");
+            results.AppendLine($"   最高1R得点: {maxRoundScore}点 (第{bestRound}ラウンド)");
+            results.AppendLine();
+        }
+        
+        return results.ToString();
+    }
+    
+    /// <summary>
+    /// 順位に応じたアイコンを取得
+    /// </summary>
+    /// <param name="rank">順位</param>
+    /// <returns>順位アイコン</returns>
+    private string GetRankIcon(int rank)
+    {
+        switch (rank)
+        {
+            case 1: return "🥇";
+            case 2: return "🥈";
+            case 3: return "🥉";
+            default: return "🏅";
+        }
+    }
+
+    /// <summary>
+    /// 旧結果表示メソッド（途中ラウンド用・現在は使用されていません）
+    /// </summary>
     private void DisplayResults()
     {
         if (resultsText == null) return;
@@ -1515,6 +1632,8 @@ public class NameCrafterGameManager : NetworkBehaviour, IStateAuthorityChanged
             PlayerTotalScores.Set(i, 0);
             PlayerRoundScores.Set(i, 0);
             PlayerVoteRates.Set(i, 0f);
+            PlayerMaxRoundScores.Set(i, 0);
+            PlayerBestRounds.Set(i, 0);
         }
 
         // 初期タイマー設定
